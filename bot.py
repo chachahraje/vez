@@ -91,19 +91,24 @@ PREDICTION_OFFSET = 1
 #    Měňte po malých krocích (5-10 ms).
 TIMING_ADJUSTMENT_MS = 5 # Příklad: čeká o 5ms déle
 
-# 7. POČÁTEČNÍ RYCHLOST (INITIAL_SPEED_GUESS_S)
-#    Odhadovaná rychlost kostky (v sekundách na sloupec) pro první kolo,
-#    než ji bot stihne změřit. Změřte přibližně, jak dlouho trvá,
-#    než kostka přejde přes jeden sloupec.
-#    Příklad: 0.05s = 50ms na sloupec.
-INITIAL_SPEED_GUESS_S = 0.05
+# 7. POČÁTEČNÍ DOBA V SLOUPCI (INITIAL_DWELL_TIME_MS)
+#    Odhad, jak dlouho (v milisekundách) se kostka zdrží v jednom sloupci,
+#    než přeskočí na další. Používá se pro první kolo, než bot změří
+#    přesnou hodnotu. Změřte přibližně, jak dlouho trvá jeden "tik" hry.
+#    Příklad: 35ms.
+INITIAL_DWELL_TIME_MS = 35
 
-# 8. VYSOKÁ PŘESNOST ČEKÁNÍ (BUSY_WAIT_MS)
-#    Pro nejpřesnější časování bot použije "busy-wait" smyčku na posledních
-#    pár milisekund. Tato hodnota určuje, jak dlouho má tato smyčka běžet.
-#    - Zvyšuje zátěž CPU, ale je mnohem přesnější než standardní `time.sleep()`.
-#    - Hodnota by měla být o něco vyšší než typická nepřesnost `time.sleep()`
-#      na vašem systému (často 10-15 ms).
+# 8. ZPOŽDĚNÍ STISKU PO SKOKU (PRESS_DELAY_MS_AFTER_JUMP)
+#    Toto je klíčové nastavení pro přesné zacílení.
+#    Určuje, kolik milisekund má bot počkat po začátku dalšího "tiku"
+#    (když kostka skočí do cílového sloupce), než stiskne mezerník.
+#    Chcete trefit okno 5-10ms, takže hodnota by měla být v tomto rozmezí.
+#    - Začněte s hodnotou okolo 5 a jemně ji laďte.
+PRESS_DELAY_MS_AFTER_JUMP = 5
+
+# 9. VYSOKÁ PŘESNOST ČEKÁNÍ (BUSY_WAIT_MS)
+#    Pro nejpřesnější časování bot použije "busy-wait" smyčku.
+#    Tato hodnota by měla být o něco vyšší než `PRESS_DELAY_MS_AFTER_JUMP`.
 #    Doporučená hodnota: 15-20 ms.
 BUSY_WAIT_MS = 15
 
@@ -116,10 +121,10 @@ BUSY_WAIT_MS = 15
 BLOCK_COLOR_BGR = np.array(BLOCK_COLOR_RGB[::-1])
 COLUMN_WIDTH = GAME_REGION['width'] / NUM_COLUMNS
 
-def find_block_position(sct_instance):
+def find_block_column(sct_instance):
     """
-    Snímá herní obrazovku, najde kostku a vrátí její přesnou pozici X a index sloupce.
-    Vrací (None, None), pokud kostku nenajde.
+    Snímá herní obrazovku, najde kostku a vrátí index jejího sloupce (0-9).
+    Pokud kostku nenajde, vrátí None.
     """
     try:
         img = sct_instance.grab(GAME_REGION)
@@ -132,119 +137,112 @@ def find_block_position(sct_instance):
 
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
-            return None, None
+            return None
 
         largest_contour = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(largest_contour)
 
         if area < 50:
-            return None, None
+            return None
 
         M = cv2.moments(largest_contour)
         if M["m00"] == 0:
-            return None, None
+            return None
 
         center_x = int(M["m10"] / M["m00"])
         column_index = int(center_x / COLUMN_WIDTH)
 
-        return center_x, column_index
+        return column_index
 
     except Exception as e:
         print(f"Vyskytla se chyba při zpracování obrazu: {e}")
-        return None, None
+        return None
 
 def main():
     """
-    Hlavní smyčka bota s prediktivním časováním.
+    Hlavní smyčka bota se synchronizací podle "tiků" hry.
     """
     print("="*50)
-    print("Bot s prediktivním časováním se spustí za 3 sekundy...")
+    print("Bot se synchronizací podle tiků se spustí za 3 sekundy...")
     print("PŘEPNĚTE SE DO OKNA SE HROU!")
     print("Pro ukončení bota stiskněte a držte klávesu 'q'.")
     print("="*50)
     time.sleep(3)
 
-    last_pos_x = None
-    last_time = None
     last_column = -1
+    last_jump_time = 0
+    dwell_time_s = INITIAL_DWELL_TIME_MS / 1000.0 # Doba v jednom sloupci
     direction = 1  # 1 pro doprava, -1 pro doleva
-    speed_px_per_s = COLUMN_WIDTH / INITIAL_SPEED_GUESS_S # Počáteční odhad rychlosti
     action_taken = False
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
 
-            current_time = time.perf_counter()
-            pos_x, current_column = find_block_position(sct)
+            current_column = find_block_column(sct)
 
-            if pos_x is None:
+            if current_column is None:
                 # Pokud kostku nevidíme, resetujeme stav pro další kolo
                 if action_taken:
                     print("-" * 20)
                     action_taken = False
-                    last_pos_x = None
                     last_column = -1
+                    last_jump_time = 0
                 continue
 
-            # Měření rychlosti a směru
-            if last_pos_x is not None and last_column != current_column:
-                delta_time = current_time - last_time
-                delta_pos = pos_x - last_pos_x
+            # Detekce skoku do nového sloupce
+            if current_column != last_column:
+                current_time = time.perf_counter()
 
-                if delta_time > 0.001: # Zabráníme dělení nulou
-                    # Určení směru
-                    new_direction = 1 if delta_pos > 0 else -1
+                # Měření času mezi skoky (dwell time)
+                if last_jump_time > 0:
+                    measured_dwell_time = current_time - last_jump_time
+                    # Klouzavý průměr pro stabilizaci měření
+                    dwell_time_s = (dwell_time_s * 0.7) + (measured_dwell_time * 0.3)
+                    print(f"Nový tik: {dwell_time_s * 1000:.1f} ms")
+
+                # Určení směru
+                if last_column != -1:
+                    new_direction = 1 if current_column > last_column else -1
                     if new_direction != direction:
-                        print(f"Změna směru! Nový směr: {'doprava' if new_direction == 1 else 'doleva'}")
+                        print(f"Změna směru: {'doprava' if new_direction == 1 else 'doleva'}")
                         direction = new_direction
 
-                    # Výpočet rychlosti
-                    current_speed = abs(delta_pos / delta_time)
-                    # Použijeme klouzavý průměr pro stabilizaci rychlosti
-                    speed_px_per_s = (speed_px_per_s * 0.8) + (current_speed * 0.2)
+                last_jump_time = current_time
 
-            # Aktualizace pozice a času pro další iteraci
-            last_pos_x = pos_x
-            last_time = current_time
-            last_column = current_column
+                # --- Prediktivní logika založená na tiku ---
+                prediction_trigger_column = TARGET_COLUMN - (PREDICTION_OFFSET * direction)
 
-            # --- Prediktivní logika ---
-            prediction_trigger_column = TARGET_COLUMN - (PREDICTION_OFFSET * direction)
+                if current_column == prediction_trigger_column and not action_taken:
 
-            if current_column == prediction_trigger_column and not action_taken:
+                    # Předpověď času, kdy kostka skočí do CÍLOVÉHO sloupce
+                    predicted_target_jump_time = last_jump_time + dwell_time_s
 
-                # Cílová pozice X (střed cílového sloupce)
-                target_x = (TARGET_COLUMN + 0.5) * COLUMN_WIDTH
+                    # Cílový čas stisku je mírně po předpovězeném skoku, upravený o jemné doladění
+                    total_delay_s = (PRESS_DELAY_MS_AFTER_JUMP + TIMING_ADJUSTMENT_MS) / 1000.0
+                    target_press_time = predicted_target_jump_time + total_delay_s
 
-                # Vzdálenost k cíli v pixelech
-                distance_to_target_px = abs(target_x - pos_x)
+                    print(f"Kostka v trigger sloupci {current_column}. Cíl: {TARGET_COLUMN}")
+                    print(f"Čekám na stisk v čase +{((target_press_time - time.perf_counter()) * 1000):.1f} ms")
 
-                # Odhadovaný čas k dosažení cíle
-                time_to_target_s = distance_to_target_px / speed_px_per_s
+                    # Hybridní čekání
+                    wait_time_s = target_press_time - time.perf_counter()
+                    busy_wait_s = BUSY_WAIT_MS / 1000.0
+                    sleep_duration = wait_time_s - busy_wait_s
 
-                # Přidání manuální korekce a výpočet cílového času
-                final_wait_time_s = time_to_target_s + (TIMING_ADJUSTMENT_MS / 1000.0)
-                target_press_time = time.perf_counter() + final_wait_time_s
+                    if sleep_duration > 0:
+                        time.sleep(sleep_duration)
 
-                print(f"Kostka ve sloupci {current_column}. Cíl: {TARGET_COLUMN}. Směr: {'doprava' if direction == 1 else 'doleva'}")
-                print(f"Odhadovaný čas do cíle: {time_to_target_s:.3f}s. Celkové čekání: {final_wait_time_s:.4f}s.")
+                    # Smyčka pro vysokou přesnost
+                    while time.perf_counter() < target_press_time:
+                        pass
 
-                # Hybridní čekání: time.sleep() + busy-wait
-                busy_wait_s = BUSY_WAIT_MS / 1000.0
-                sleep_duration = final_wait_time_s - busy_wait_s
+                    pyautogui.press('space')
+                    print(f"==> MEZERNÍK! (Cílový sloupec: {TARGET_COLUMN})")
 
-                if sleep_duration > 0:
-                    time.sleep(sleep_duration)
+                    action_taken = True
+                    time.sleep(COOLDOWN_AFTER_PRESS)
 
-                # Smyčka pro vysokou přesnost na posledních pár ms
-                while time.perf_counter() < target_press_time:
-                    pass
-
-                pyautogui.press('space')
-                print(f"==> MEZERNÍK! (Cílový sloupec: {TARGET_COLUMN})")
-
-                action_taken = True # Značka, že jsme provedli akci
-                time.sleep(COOLDOWN_AFTER_PRESS) # Pauza po stisku
+                last_column = current_column
 
         print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
 
