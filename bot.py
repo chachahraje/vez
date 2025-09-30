@@ -98,6 +98,15 @@ TIMING_ADJUSTMENT_MS = 5 # Příklad: čeká o 5ms déle
 #    Příklad: 0.05s = 50ms na sloupec.
 INITIAL_SPEED_GUESS_S = 0.05
 
+# 8. VYSOKÁ PŘESNOST ČEKÁNÍ (BUSY_WAIT_MS)
+#    Pro nejpřesnější časování bot použije "busy-wait" smyčku na posledních
+#    pár milisekund. Tato hodnota určuje, jak dlouho má tato smyčka běžet.
+#    - Zvyšuje zátěž CPU, ale je mnohem přesnější než standardní `time.sleep()`.
+#    - Hodnota by měla být o něco vyšší než typická nepřesnost `time.sleep()`
+#      na vašem systému (často 10-15 ms).
+#    Doporučená hodnota: 15-20 ms.
+BUSY_WAIT_MS = 15
+
 # ==============================================================================
 # --- KÓD BOTA ---
 # Od této části byste neměli nic měnit, pokud nevíte, co děláte.
@@ -213,14 +222,23 @@ def main():
                 # Odhadovaný čas k dosažení cíle
                 time_to_target_s = distance_to_target_px / speed_px_per_s
 
-                # Přidání manuální korekce
-                final_wait_time = time_to_target_s + (TIMING_ADJUSTMENT_MS / 1000.0)
+                # Přidání manuální korekce a výpočet cílového času
+                final_wait_time_s = time_to_target_s + (TIMING_ADJUSTMENT_MS / 1000.0)
+                target_press_time = time.perf_counter() + final_wait_time_s
 
                 print(f"Kostka ve sloupci {current_column}. Cíl: {TARGET_COLUMN}. Směr: {'doprava' if direction == 1 else 'doleva'}")
-                print(f"Odhadovaný čas do cíle: {time_to_target_s:.3f}s. Čekám: {final_wait_time:.3f}s.")
+                print(f"Odhadovaný čas do cíle: {time_to_target_s:.3f}s. Celkové čekání: {final_wait_time_s:.4f}s.")
 
-                if final_wait_time > 0:
-                    time.sleep(final_wait_time)
+                # Hybridní čekání: time.sleep() + busy-wait
+                busy_wait_s = BUSY_WAIT_MS / 1000.0
+                sleep_duration = final_wait_time_s - busy_wait_s
+
+                if sleep_duration > 0:
+                    time.sleep(sleep_duration)
+
+                # Smyčka pro vysokou přesnost na posledních pár ms
+                while time.perf_counter() < target_press_time:
+                    pass
 
                 pyautogui.press('space')
                 print(f"==> MEZERNÍK! (Cílový sloupec: {TARGET_COLUMN})")
