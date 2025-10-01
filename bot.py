@@ -67,50 +67,7 @@ TARGET_COLUMN = 8
 # 4. RYCHLOST A ČEKÁNÍ
 #    Krátká pauza po stisknutí mezerníku, aby se nestiskl vícekrát
 #    pro jednu kostku. Hodnota je ve vteřinách.
-COOLDOWN_AFTER_PRESS = 0.2 # 200ms, delší pauza pro prediktivní logiku
-
-# ==============================================================================
-# --- POKROČILÉ NASTAVENÍ PRO PŘESNÉ ČASOVÁNÍ ---
-# ==============================================================================
-
-# 5. PŘEDVÍDÁNÍ (PREDICTION)
-#    Kolik sloupců "dopředu" má bot reagovat.
-#    Pokud je cíl sloupec 8 a PREDICTION_OFFSET = 1, bot stiskne mezerník,
-#    když je kostka ve sloupci 7 (při pohybu zleva doprava).
-#    To kompenzuje zpoždění mezi detekcí a stiskem.
-#    Doporučená hodnota: 1 nebo 2.
-PREDICTION_OFFSET = 1
-
-# 6. LATENCE DETEKCE (DETECTION_LATENCY_MS)
-#    Toto je nejdůležitější nastavení pro synchronizaci.
-#    Určuje, kolik milisekund uplyne mezi okamžikem, kdy hra *zobrazí*
-#    kostku v novém sloupci, a okamžikem, kdy ji náš bot *detekuje*.
-#    Tato latence je způsobena snímáním obrazovky a zpracováním obrazu.
-#    - Laďte tuto hodnotu, dokud změřený "Nový tik" nebude stabilně
-#      odpovídat skutečné frekvenci hry (např. 33-35 ms).
-#    Doporučená startovní hodnota: 10-15 ms.
-DETECTION_LATENCY_MS = 15
-
-# 7. HERNÍ TIK (GAME_TICK_MS)
-#    Základní "tep" hry v milisekundách. Toto je konstantní hodnota,
-#    která řídí veškeré časování. Podle vašich informací je to 33ms.
-#    Tuto hodnotu byste neměli měnit, pokud si nejste jisti, že se
-#    základní frekvence hry změnila.
-GAME_TICK_MS = 33
-
-# 8. ZPOŽDĚNÍ STISKU PO SKOKU (PRESS_DELAY_MS_AFTER_JUMP)
-#    Toto je klíčové nastavení pro přesné zacílení.
-#    Určuje, kolik milisekund má bot počkat po začátku dalšího "tiku"
-#    (když kostka skočí do cílového sloupce), než stiskne mezerník.
-#    Chcete trefit okno 5-10ms, takže hodnota by měla být v tomto rozmezí.
-#    - Začněte s hodnotou okolo 5 a jemně ji laďte.
-PRESS_DELAY_MS_AFTER_JUMP = 5
-
-# 9. VYSOKÁ PŘESNOST ČEKÁNÍ (BUSY_WAIT_MS)
-#    Pro nejpřesnější časování bot použije "busy-wait" smyčku.
-#    Tato hodnota by měla být o něco vyšší než `PRESS_DELAY_MS_AFTER_JUMP`.
-#    Doporučená hodnota: 15-20 ms.
-BUSY_WAIT_MS = 15
+COOLDOWN_AFTER_PRESS = 0.1 # 100ms
 
 # ==============================================================================
 # --- KÓD BOTA ---
@@ -123,33 +80,41 @@ COLUMN_WIDTH = GAME_REGION['width'] / NUM_COLUMNS
 
 def find_block_column(sct_instance):
     """
-    Snímá herní obrazovku, najde kostku a vrátí index jejího sloupce (0-9).
+    Snímá herní obrazovku, najde kostku a vrátí index sloupce (0-9).
     Pokud kostku nenajde, vrátí None.
     """
     try:
+        # 1. Snímání obrazovky pomocí mss (je to velmi rychlé)
         img = sct_instance.grab(GAME_REGION)
         img_np = np.array(img)
+        # Převedení z BGRA (formát mss) na BGR (formát OpenCV)
         frame = cv2.cvtColor(img_np, cv2.COLOR_BGRA2BGR)
 
+        # 2. Vytvoření masky pro hledanou barvu
         lower_bound = np.maximum(0, BLOCK_COLOR_BGR - COLOR_TOLERANCE)
         upper_bound = np.minimum(255, BLOCK_COLOR_BGR + COLOR_TOLERANCE)
         mask = cv2.inRange(frame, lower_bound, upper_bound)
 
+        # 3. Nalezení největšího objektu (kontury) v masce
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
-            return None
+            return None  # Kostka nenalezena
 
         largest_contour = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(largest_contour)
 
-        if area < 50:
+        # Ignorování malých teček, které mohou být šum
+        if area < 50:  # Tuto hodnotu můžete upravit podle velikosti kostky
             return None
 
+        # 4. Výpočet pozice středu kostky
         M = cv2.moments(largest_contour)
         if M["m00"] == 0:
             return None
 
         center_x = int(M["m10"] / M["m00"])
+
+        # 5. Určení sloupce podle pozice
         column_index = int(center_x / COLUMN_WIDTH)
 
         return column_index
@@ -158,89 +123,76 @@ def find_block_column(sct_instance):
         print(f"Vyskytla se chyba při zpracování obrazu: {e}")
         return None
 
+
 def main():
     """
-    Hlavní smyčka bota se synchronizací podle KONSTANTNÍHO tiku hry.
+    Hlavní smyčka bota s novou synchronizační logikou.
     """
     print("="*50)
-    print("Bot se synchronizací podle konstantního tiku se spustí za 3 sekundy...")
+    print("Bot se spustí za 3 sekundy...")
     print("PŘEPNĚTE SE DO OKNA SE HROU!")
     print("Pro ukončení bota stiskněte a držte klávesu 'q'.")
     print("="*50)
     time.sleep(3)
 
-    last_column = -1
-    direction = 1  # 1 pro doprava, -1 pro doleva
-    action_taken = False
+    last_seen_column = -1
 
+    # Stavové proměnné pro synchronizaci
+    first_sighting_time = None
+    is_initialized = False
+    has_seen_column_zero = False
+
+    # Vytvoření instance mss pro snímání obrazovky
     with mss.mss() as sct:
-        while not keyboard.is_pressed('q'):
+        while True:
+            if keyboard.is_pressed('q'):
+                print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
+                break
 
             current_column = find_block_column(sct)
 
             if current_column is None:
-                # Pokud kostku nevidíme, resetujeme stav pro další kolo
-                if action_taken:
-                    print("-" * 20)
-                    action_taken = False
-                    last_column = -1
+                # Pokud kostku nevidíme, nic neděláme
                 continue
 
-            # Detekce skoku do nového sloupce
-            if current_column != last_column:
-                detection_time = time.perf_counter()
+            # --- Logika pro počáteční 2s synchronizaci ---
+            if first_sighting_time is None:
+                print("Kostka poprvé detekována. Spouštím 2s inicializační časovač...")
+                first_sighting_time = time.time()
 
-                # Kompenzace latence: odhad, kdy se skok skutečně stal v herním enginu
-                latency_s = DETECTION_LATENCY_MS / 1000.0
-                inferred_jump_start_time = detection_time - latency_s
+            if not is_initialized:
+                if (time.time() - first_sighting_time) > 2.0:
+                    print("Inicializace dokončena. Čekám na začátek cyklu (sloupec 0).")
+                    is_initialized = True
+                else:
+                    # Během prvních 2 sekund jen pozorujeme a aktualizujeme last_seen_column
+                    last_seen_column = current_column
+                    continue
 
-                # Získání KONSTANTNÍHO herního tiku pro predikci
-                game_tick_s = GAME_TICK_MS / 1000.0
-                print(f"Detekován skok. Synchronizuji s konstantním tikem: {GAME_TICK_MS} ms")
+            # --- Logika pro čekání na celý cyklus (detekce sloupce 0) ---
+            if not has_seen_column_zero and current_column == 0:
+                print("Detekován začátek cyklu (sloupec 0). Bot je nyní plně aktivní.")
+                has_seen_column_zero = True
 
-                # Určení směru
-                if last_column != -1:
-                    new_direction = 1 if current_column > last_column else -1
-                    if new_direction != direction:
-                        print(f"Změna směru: {'doprava' if new_direction == 1 else 'doleva'}")
-                        direction = new_direction
+            # --- Podmínka pro stisk ---
+            # Stiskneme pouze pokud:
+            # 1. Je dokončena 2s inicializace
+            # 2. Viděli jsme začátek cyklu (sloupec 0)
+            # 3. Kostka je v cílovém sloupci
+            # 4. Je to poprvé, co ji v tomto sloupci vidíme (prevence dvojkliku)
+            if is_initialized and has_seen_column_zero and current_column == TARGET_COLUMN and current_column != last_seen_column:
+                 pyautogui.press('space')
+                 print(f"Kostka v cílovém sloupci {TARGET_COLUMN}! Stisknut mezerník!")
 
-                # --- Prediktivní logika založená na KONSTANTNÍM tiku ---
-                prediction_trigger_column = TARGET_COLUMN - (PREDICTION_OFFSET * direction)
+                 # Počkáme chvíli, abychom nereagovali na stejnou kostku znovu
+                 time.sleep(COOLDOWN_AFTER_PRESS)
 
-                if current_column == prediction_trigger_column and not action_taken:
+                 # Resetujeme podmínku pro další cyklus
+                 print("Čekám na další cyklus (sloupec 0)...")
+                 has_seen_column_zero = False
 
-                    # Předpověď času, kdy kostka skočí do CÍLOVÉHO sloupce
-                    predicted_target_jump_time = inferred_jump_start_time + game_tick_s
-
-                    # Cílový čas stisku je mírně po předpovězeném skoku
-                    press_delay_s = PRESS_DELAY_MS_AFTER_JUMP / 1000.0
-                    target_press_time = predicted_target_jump_time + press_delay_s
-
-                    print(f"Kostka v trigger sloupci {current_column}. Cíl: {TARGET_COLUMN}")
-                    print(f"Čekám na stisk v čase +{((target_press_time - time.perf_counter()) * 1000):.1f} ms")
-
-                    # Hybridní čekání
-                    wait_time_s = target_press_time - time.perf_counter()
-                    busy_wait_s = BUSY_WAIT_MS / 1000.0
-                    sleep_duration = wait_time_s - busy_wait_s
-
-                    if sleep_duration > 0:
-                        time.sleep(sleep_duration)
-
-                    # Smyčka pro vysokou přesnost
-                    while time.perf_counter() < target_press_time:
-                        pass
-
-                    pyautogui.press('space')
-                    print(f"==> MEZERNÍK! (Cílový sloupec: {TARGET_COLUMN})")
-
-                    action_taken = True
-                    time.sleep(COOLDOWN_AFTER_PRESS)
-
-                last_column = current_column
-
-        print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
+            # Zapamatujeme si, kde byla kostka naposledy
+            last_seen_column = current_column
 
 if __name__ == "__main__":
     print("Vítejte v botovi pro skládání věže!")
