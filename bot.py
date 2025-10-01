@@ -92,6 +92,13 @@ INPUT_BURST_COUNT = 3
 #    Prodleva mezi jednotlivými stisky v dávce (v milisekundách). Doporučená hodnota: 5 až 10.
 INPUT_BURST_DELAY_MS = 7
 
+
+# 5. DEBUG OKNO
+#    Pokud nastavíte na True, zobrazí se okno, které v reálném čase ukazuje,
+#    co bot "vidí". Užitečné pro ladění a kontrolu, zda správně
+#    detekuje herní oblast a kostku.
+SHOW_DEBUG_WINDOW = True
+
 # ==============================================================================
 # --- KÓD BOTA ---
 # Od této části byste neměli nic měnit, pokud nevíte, co děláte.
@@ -104,6 +111,7 @@ COLUMN_WIDTH = GAME_REGION['width'] / NUM_COLUMNS
 def find_block_column(sct_instance):
     """
     Snímá herní obrazovku, najde kostku a vrátí index jejího sloupce (0-9).
+    Pokud je zapnuté debug okno, vizualizuje detekci.
     Pokud kostku nenajde, vrátí None.
     """
     try:
@@ -111,31 +119,43 @@ def find_block_column(sct_instance):
         img_np = np.array(img)
         frame = cv2.cvtColor(img_np, cv2.COLOR_BGRA2BGR)
 
+        # Vytvoření masky pro detekci barvy
         lower_bound = np.maximum(0, BLOCK_COLOR_BGR - COLOR_TOLERANCE)
         upper_bound = np.minimum(255, BLOCK_COLOR_BGR + COLOR_TOLERANCE)
         mask = cv2.inRange(frame, lower_bound, upper_bound)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return None
 
-        largest_contour = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(largest_contour)
+        column_index = None
+        if contours:
+            largest_contour = max(contours, key=cv2.contourArea)
+            area = cv2.contourArea(largest_contour)
 
-        if area < 50:
-            return None
+            if area >= 50:  # Minimální plocha pro detekci kostky
+                M = cv2.moments(largest_contour)
+                if M["m00"] != 0:
+                    center_x = int(M["m10"] / M["m00"])
+                    column_index = int(center_x / COLUMN_WIDTH)
 
-        M = cv2.moments(largest_contour)
-        if M["m00"] == 0:
-            return None
+                    # Vykreslení do debug okna, pokud je aktivní
+                    if SHOW_DEBUG_WINDOW:
+                        cv2.drawContours(frame, [largest_contour], -1, (0, 255, 0), 2)
+                        center_y = int(M["m01"] / M["m00"])
+                        cv2.circle(frame, (center_x, center_y), 5, (0, 0, 255), -1)
 
-        center_x = int(M["m10"] / M["m00"])
-        column_index = int(center_x / COLUMN_WIDTH)
+        # Zobrazení debug okna, pokud je aktivní
+        if SHOW_DEBUG_WINDOW:
+            cv2.imshow("Bot Vision - Debug", frame)
+            # Nutné pro obnovení okna, čeká 1 ms
+            cv2.waitKey(1)
 
         return column_index
 
     except Exception as e:
         print(f"Vyskytla se chyba při zpracování obrazu: {e}")
+        # Při chybě zavřeme okno, aby nezůstalo viset
+        if SHOW_DEBUG_WINDOW:
+            cv2.destroyAllWindows()
         return None
 
 def main():
@@ -245,10 +265,14 @@ def main():
 
                 last_column = current_column
 
+    print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
+    # Zavřeme debug okno, pokud bylo otevřené
+    if SHOW_DEBUG_WINDOW:
+        cv2.destroyAllWindows()
+
 if __name__ == "__main__":
     print("Vítejte v botovi pro skládání věže!")
     print("Před spuštěním prosím nastavte hodnoty v sekci 'NASTAVENÍ BOTA'.")
-    print("\nPotřebné knihovny: pip install numpy opencv-python pyautogui keyboard mss")
 
     # --- Výběr Levelu ---
     level = 0
