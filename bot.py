@@ -39,7 +39,8 @@ import pyautogui
 #    - 'height' = (pravý dolní Y) - (levý horní Y)
 #
 # Příklad:
-GAME_REGION = {'left': 660, 'top': 518, 'width': 603, 'height': 64}
+# Toto je základní nastavení pro Level 1.
+GAME_REGION = {'left': 880, 'top': 675, 'width': 795, 'height': 75}
 
 
 # 2. BARVA KOSTKY (BLOCK_COLOR_RGB)
@@ -64,33 +65,31 @@ NUM_COLUMNS = 10
 TARGET_COLUMN = 8
 
 
-# 4. NASTAVENÍ PRO DYNAMICKÉ ČASOVÁNÍ
-#    Tato nastavení řídí novou logiku, která měří rychlost kostky
+# 4. POKROČILÉ NASTAVENÍ PRO ČASOVÁNÍ
+#    Tato nastavení řídí logiku, která dynamicky měří rychlost kostky
 #    a podle toho předvídá, kdy stisknout mezerník.
 # ==============================================================================
 
-#    SPUŠTĚNÍ AKCE (TRIGGER)
-#    Kolik sloupců PŘED cílovým sloupcem má bot začít s výpočtem.
-#    Pokud je cíl sloupec 8 a TRIGGER_COLUMN_OFFSET = 2, bot se "aktivuje",
-#    když kostka dorazí do sloupce 6 (při pohybu zleva doprava).
-#    Větší hodnota dává botovi více času na výpočet, ale vyžaduje
-#    stabilnější rychlost kostky.
+#    PŘEDVÍDÁNÍ (PREDICTION_OFFSET)
+#    Kolik sloupců PŘED cílovým sloupcem má bot reagovat.
+#    Pokud je cíl sloupec 8 a PREDICTION_OFFSET = 1, bot stiskne mezerník,
+#    když je kostka ve sloupci 7. To kompenzuje zpoždění.
 #    Doporučená hodnota: 1 nebo 2.
-TRIGGER_COLUMN_OFFSET = 2
+PREDICTION_OFFSET = 1
 
+#    ZPOŽDĚNÍ STISKU (PRESS_DELAY_MS_AFTER_JUMP)
+#    Kolik milisekund má bot počkat po PŘEDPOVĚZENÉM skoku do cílového
+#    sloupce, než stiskne mezerník. Cílem je trefit začátek
+#    okna pro vstup.
+#    Doporučená hodnota: 5-15 ms.
+PRESS_DELAY_MS_AFTER_JUMP = 10
 
 #    DÁVKA VSTUPŮ (INPUT BURST)
 #    Abychom měli jistotu, že náš stisk hra zaregistruje, pošleme jich
-#    několik ve velmi rychlém sledu. Tím pokryjeme případné malé
-#    nepřesnosti v časování nebo zpoždění ve hře.
-
-#    Počet stisků v jedné dávce.
-#    Doporučená hodnota: 3 až 5.
+#    několik ve velmi rychlém sledu.
+#    Počet stisků v jedné dávce. Doporučená hodnota: 3 až 5.
 INPUT_BURST_COUNT = 3
-
-#    Prodleva mezi jednotlivými stisky v dávce (v milisekundách).
-#    Cílem je trefit herní okno pro vstup, které je často velmi krátké.
-#    Doporučená hodnota: 5 až 10 ms.
+#    Prodleva mezi jednotlivými stisky v dávce (v milisekundách). Doporučená hodnota: 5 až 10.
 INPUT_BURST_DELAY_MS = 7
 
 # ==============================================================================
@@ -150,85 +149,87 @@ def main():
     print("="*50)
     time.sleep(3)
 
-    # --- Stavové proměnné bota ---
-    # Tři hlavní stavy:
-    # 'AWAITING_CYCLE': Čeká, až kostka dorazí na startovní pozici (sloupec 0).
-    # 'MEASURING': Sleduje pohyb kostky, aby změřila její rychlost.
-    # 'ARMED': Rychlost je změřena, bot je připraven k akci.
-    state = 'AWAITING_CYCLE'
-
     last_column = -1
     direction = 1
-    dwell_time_s = None  # Průměrný čas, který kostka stráví v jednom sloupci
-    column_timestamps = {} # Záznamy časů pro měření rychlosti
+    action_taken = False
+
+    # Proměnné pro dynamické měření rychlosti
+    dwell_time_s = None      # Změřený čas na jeden sloupec
+    column_timestamps = {}   # Záznamy časů pro měření
+    is_calibrated = False    # Zda již máme změřenou rychlost
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
             current_column = find_block_column(sct)
+
+            # Pokud kostka zmizí (po úspěšné akci), resetujeme stav
             if current_column is None:
+                if action_taken:
+                    print("-" * 20)
+                    print("Akce dokončena. Resetuji pro další kostku.")
+                    action_taken = False
+                    last_column = -1
+                    # Vynulujeme kalibraci, aby se rychlost změřila znovu
+                    is_calibrated = False
+                    column_timestamps = {}
+                    dwell_time_s = None
                 continue
 
-            # Detekce změny sloupce je klíčová pro veškerou logiku
+            # --- Logika se spouští pouze při změně sloupce ---
             if current_column != last_column:
                 detection_time = time.perf_counter()
 
                 # Aktualizace směru pohybu
                 if last_column != -1:
                     new_direction = 1 if current_column > last_column else -1
-                    if new_direction != direction:
-                        print(f"Změna směru: {'doprava' if new_direction == 1 else 'doleva'}")
+                    if direction != new_direction:
                         direction = new_direction
+                        print(f"Změna směru: {'doprava' if direction == 1 else 'doleva'}")
+                        # Při změně směru je nejlepší resetovat měření
+                        column_timestamps = {}
+                        is_calibrated = False
 
-                print(f"Stav: {state}, Sloupec: {current_column}")
+                # --- Měření rychlosti ---
+                # Začneme znovu měřit, pokud se vrátíme na začátek
+                if current_column == 0:
+                    column_timestamps = {}
+                    is_calibrated = False
 
-                # --- STAV: ČEKÁNÍ NA NOVÝ CYKLUS ---
-                if state == 'AWAITING_CYCLE':
-                    if current_column == 0:
-                        print("Detekován začátek cyklu (sloupec 0). Zahajuji měření rychlosti.")
-                        state = 'MEASURING'
-                        column_timestamps = {0: detection_time}
+                column_timestamps[current_column] = detection_time
 
-                # --- STAV: MĚŘENÍ RYCHLOSTI ---
-                elif state == 'MEASURING':
-                    column_timestamps[current_column] = detection_time
+                # Pro měření potřebujeme alespoň pár záznamů
+                if not is_calibrated and len(column_timestamps) > 2:
+                    sorted_cols = sorted(column_timestamps.keys())
+                    time_diffs = [column_timestamps[sorted_cols[i]] - column_timestamps[sorted_cols[i-1]] for i in range(1, len(sorted_cols))]
 
-                    # Vypočítáme rychlost z několika po sobě jdoucích skoků
-                    if len(column_timestamps) > 3:
-                        # Seřadíme sloupce a časy, abychom mohli počítat rozdíly
-                        sorted_cols = sorted(column_timestamps.keys())
-                        time_diffs = [column_timestamps[sorted_cols[i]] - column_timestamps[sorted_cols[i-1]] for i in range(1, len(sorted_cols))]
-
-                        # Odstraníme případné odlehlé hodnoty (např. při změně směru)
-                        stable_diffs = [d for d in time_diffs if d > 0.01]
-                        if not stable_diffs:
-                            continue
-
+                    # Odfiltrujeme odlehlé hodnoty (např. po změně směru)
+                    stable_diffs = [d for d in time_diffs if 0.001 < d < 1.0] # 1ms - 1s
+                    if len(stable_diffs) > 1:
                         dwell_time_s = np.mean(stable_diffs)
-                        print(f"Změřena rychlost: {dwell_time_s * 1000:.2f} ms na sloupec.")
-                        print("Bot je nyní aktivován a připraven k akci (ARMED).")
-                        state = 'ARMED'
+                        is_calibrated = True
+                        print(f"Bot je zkalibrován. Rychlost: {dwell_time_s * 1000:.2f} ms/sloupec.")
 
-                # --- STAV: PŘIPRAVEN K AKCI ---
-                elif state == 'ARMED':
-                    trigger_column = TARGET_COLUMN - (TRIGGER_COLUMN_OFFSET * direction)
+                # --- Predikce a Akce ---
+                # Akci provedeme pouze pokud máme změřenou rychlost a ještě jsme nejednali
+                if is_calibrated and not action_taken:
+                    prediction_trigger_column = TARGET_COLUMN - (PREDICTION_OFFSET * direction)
 
-                    if current_column == trigger_column:
-                        columns_to_go = abs(TARGET_COLUMN - current_column)
-                        time_to_target_s = columns_to_go * dwell_time_s
+                    if current_column == prediction_trigger_column:
+                        # Vypočítáme čas do dopadu na cílový sloupec
+                        jumps_to_go = PREDICTION_OFFSET
+                        time_to_target_s = jumps_to_go * dwell_time_s
 
-                        # VÝPOČET ČASU DOPADU:
-                        # Náš `detection_time` je čas, kdy kostka *vstoupila* do `trigger_column`.
-                        # `time_to_target_s` je doba, za kterou dorazí ke *vstupu* do `TARGET_COLUMN`.
-                        # Chceme však stisknout uprostřed doby, kdy je v cílovém sloupci,
-                        # proto přičteme polovinu změřeného času na sloupec (`dwell_time_s`).
-                        time_to_target_center_s = time_to_target_s + (dwell_time_s / 2.0)
-                        predicted_arrival_time = detection_time + time_to_target_center_s
+                        predicted_target_jump_time = detection_time + time_to_target_s
+
+                        # Přidáme uživatelské zpoždění pro finální časování
+                        press_delay_s = PRESS_DELAY_MS_AFTER_JUMP / 1000.0
+                        target_press_time = predicted_target_jump_time + press_delay_s
 
                         print(f"Kostka v trigger sloupci {current_column}. Cíl: {TARGET_COLUMN}")
-                        print(f"Predikovaný čas dopadu za: {(predicted_arrival_time - time.perf_counter()) * 1000:.1f} ms")
+                        print(f"Predikovaný čas stisku za: {((target_press_time - time.perf_counter()) * 1000):.1f} ms")
 
-                        # Přesné čekání na vypočítaný čas
-                        wait_time = predicted_arrival_time - time.perf_counter()
+                        # Přesné čekání na stisk
+                        wait_time = target_press_time - time.perf_counter()
                         if wait_time > 0:
                             time.sleep(wait_time)
 
@@ -236,26 +237,47 @@ def main():
                         print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
                         for i in range(INPUT_BURST_COUNT):
                             pyautogui.press('space')
-                            # Krátká pauza mezi stisky v dávce
                             time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
 
-                        # Po akci se bot resetuje a čeká na další cyklus
-                        print("-" * 20)
-                        print("Akce provedena. Čekám na další cyklus od sloupce 0.")
-                        state = 'AWAITING_CYCLE'
-                        dwell_time_s = None
-                        column_timestamps = {}
-                        # Krátká pauza, abychom znovu nedetekovali stejnou kostku
-                        time.sleep(0.3)
+                        action_taken = True
+                        # Krátká pauza, aby se zabránilo opětovné detekci
+                        time.sleep(0.2)
 
                 last_column = current_column
-
-        print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
 
 if __name__ == "__main__":
     print("Vítejte v botovi pro skládání věže!")
     print("Před spuštěním prosím nastavte hodnoty v sekci 'NASTAVENÍ BOTA'.")
     print("\nPotřebné knihovny: pip install numpy opencv-python pyautogui keyboard mss")
+
+    # --- Výběr Levelu ---
+    level = 0
+    while True:
+        try:
+            level_input = input("Zadejte level, který chcete hrát (1-10): ")
+            level = int(level_input)
+            if 1 <= level <= 10:
+                break
+            else:
+                print("Chyba: Zadejte prosím číslo od 1 do 10.")
+        except ValueError:
+            print("Chyba: Zadejte prosím platné číslo.")
+
+    # Dynamický výpočet herní oblasti na základě zvoleného levelu.
+    # Level 1 a 2 mají specifické 'top' souřadnice.
+    # Pro levely 3 a vyšší se 'top' souřadnice snižuje o 100px pro každý
+    # další level, vycházeje z hodnoty pro level 2.
+    if level == 1:
+        GAME_REGION['top'] = 675  # Specifická hodnota pro Level 1
+    elif level == 2:
+        GAME_REGION['top'] = 1020 # Specifická hodnota pro Level 2
+    else: # Pro level > 2
+        GAME_REGION['top'] = 1020 - (100 * (level - 2))
+
+
+    print(f"Úspěšně nastaven level {level}.")
+    print(f"Herní oblast pro tento level: {GAME_REGION}")
+
 
     # Zeptáme se uživatele, zda chce spustit bota
     run_bot = input("Chcete spustit bota nyní? (ano/ne): ")
