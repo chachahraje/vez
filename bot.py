@@ -81,15 +81,15 @@ COOLDOWN_AFTER_PRESS = 0.2 # 200ms, delší pauza pro prediktivní logiku
 #    Doporučená hodnota: 1 nebo 2.
 PREDICTION_OFFSET = 1
 
-# 6. JEMNÉ DOLADĚNÍ ČASOVÁNÍ (TIMING_ADJUSTMENT_MS)
-#    Pokud bot kliká konzistentně příliš brzy nebo příliš pozdě,
-#    upravte tuto hodnotu.
-#    - Kladná hodnota (např. 10) způsobí, že bot počká o 10 ms déle.
-#      (Použijte, pokud kliká PŘÍLIŠ BRZY).
-#    - Záporná hodnota (např. -5) způsobí, že bot klikne o 5 ms dříve.
-#      (Použijte, pokud kliká PŘÍLIŠ POZDĚ).
-#    Měňte po malých krocích (5-10 ms).
-TIMING_ADJUSTMENT_MS = 5 # Příklad: čeká o 5ms déle
+# 6. LATENCE DETEKCE (DETECTION_LATENCY_MS)
+#    Toto je nejdůležitější nastavení pro synchronizaci.
+#    Určuje, kolik milisekund uplyne mezi okamžikem, kdy hra *zobrazí*
+#    kostku v novém sloupci, a okamžikem, kdy ji náš bot *detekuje*.
+#    Tato latence je způsobena snímáním obrazovky a zpracováním obrazu.
+#    - Laďte tuto hodnotu, dokud změřený "Nový tik" nebude stabilně
+#      odpovídat skutečné frekvenci hry (např. 33-35 ms).
+#    Doporučená startovní hodnota: 10-15 ms.
+DETECTION_LATENCY_MS = 15
 
 # 7. POČÁTEČNÍ DOBA V SLOUPCI (INITIAL_DWELL_TIME_MS)
 #    Odhad, jak dlouho (v milisekundách) se kostka zdrží v jednom sloupci,
@@ -191,14 +191,18 @@ def main():
 
             # Detekce skoku do nového sloupce
             if current_column != last_column:
-                current_time = time.perf_counter()
+                detection_time = time.perf_counter()
 
-                # Měření času mezi skoky (dwell time)
-                if last_jump_time > 0:
-                    measured_dwell_time = current_time - last_jump_time
+                # Kompenzace latence: odhad, kdy se skok skutečně stal v herním enginu
+                latency_s = DETECTION_LATENCY_MS / 1000.0
+                inferred_jump_start_time = detection_time - latency_s
+
+                # Měření času mezi skoky (dwell time) na základě odhadovaných časů
+                if last_jump_time > 0: # last_jump_time nyní ukládá inferred_jump_start_time
+                    measured_dwell_time = inferred_jump_start_time - last_jump_time
                     # Klouzavý průměr pro stabilizaci měření
                     dwell_time_s = (dwell_time_s * 0.7) + (measured_dwell_time * 0.3)
-                    print(f"Nový tik: {dwell_time_s * 1000:.1f} ms")
+                    print(f"Nový tik: {dwell_time_s * 1000:.1f} ms (Latence: {DETECTION_LATENCY_MS}ms)")
 
                 # Určení směru
                 if last_column != -1:
@@ -207,19 +211,19 @@ def main():
                         print(f"Změna směru: {'doprava' if new_direction == 1 else 'doleva'}")
                         direction = new_direction
 
-                last_jump_time = current_time
+                last_jump_time = inferred_jump_start_time
 
-                # --- Prediktivní logika založená na tiku ---
+                # --- Prediktivní logika založená na kompenzovaném tiku ---
                 prediction_trigger_column = TARGET_COLUMN - (PREDICTION_OFFSET * direction)
 
                 if current_column == prediction_trigger_column and not action_taken:
 
                     # Předpověď času, kdy kostka skočí do CÍLOVÉHO sloupce
-                    predicted_target_jump_time = last_jump_time + dwell_time_s
+                    predicted_target_jump_time = inferred_jump_start_time + dwell_time_s
 
-                    # Cílový čas stisku je mírně po předpovězeném skoku, upravený o jemné doladění
-                    total_delay_s = (PRESS_DELAY_MS_AFTER_JUMP + TIMING_ADJUSTMENT_MS) / 1000.0
-                    target_press_time = predicted_target_jump_time + total_delay_s
+                    # Cílový čas stisku je mírně po předpovězeném skoku
+                    press_delay_s = PRESS_DELAY_MS_AFTER_JUMP / 1000.0
+                    target_press_time = predicted_target_jump_time + press_delay_s
 
                     print(f"Kostka v trigger sloupci {current_column}. Cíl: {TARGET_COLUMN}")
                     print(f"Čekám na stisk v čase +{((target_press_time - time.perf_counter()) * 1000):.1f} ms")
