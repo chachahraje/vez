@@ -91,12 +91,12 @@ PREDICTION_OFFSET = 1
 #    Doporučená startovní hodnota: 10-15 ms.
 DETECTION_LATENCY_MS = 15
 
-# 7. POČÁTEČNÍ DOBA V SLOUPCI (INITIAL_DWELL_TIME_MS)
-#    Odhad, jak dlouho (v milisekundách) se kostka zdrží v jednom sloupci,
-#    než přeskočí na další. Používá se pro první kolo, než bot změří
-#    přesnou hodnotu. Změřte přibližně, jak dlouho trvá jeden "tik" hry.
-#    Příklad: 35ms.
-INITIAL_DWELL_TIME_MS = 35
+# 7. HERNÍ TIK (GAME_TICK_MS)
+#    Základní "tep" hry v milisekundách. Toto je konstantní hodnota,
+#    která řídí veškeré časování. Podle vašich informací je to 33ms.
+#    Tuto hodnotu byste neměli měnit, pokud si nejste jisti, že se
+#    základní frekvence hry změnila.
+GAME_TICK_MS = 33
 
 # 8. ZPOŽDĚNÍ STISKU PO SKOKU (PRESS_DELAY_MS_AFTER_JUMP)
 #    Toto je klíčové nastavení pro přesné zacílení.
@@ -160,18 +160,16 @@ def find_block_column(sct_instance):
 
 def main():
     """
-    Hlavní smyčka bota se synchronizací podle "tiků" hry.
+    Hlavní smyčka bota se synchronizací podle KONSTANTNÍHO tiku hry.
     """
     print("="*50)
-    print("Bot se synchronizací podle tiků se spustí za 3 sekundy...")
+    print("Bot se synchronizací podle konstantního tiku se spustí za 3 sekundy...")
     print("PŘEPNĚTE SE DO OKNA SE HROU!")
     print("Pro ukončení bota stiskněte a držte klávesu 'q'.")
     print("="*50)
     time.sleep(3)
 
     last_column = -1
-    last_jump_time = 0
-    dwell_time_s = INITIAL_DWELL_TIME_MS / 1000.0 # Doba v jednom sloupci
     direction = 1  # 1 pro doprava, -1 pro doleva
     action_taken = False
 
@@ -186,7 +184,6 @@ def main():
                     print("-" * 20)
                     action_taken = False
                     last_column = -1
-                    last_jump_time = 0
                 continue
 
             # Detekce skoku do nového sloupce
@@ -197,12 +194,9 @@ def main():
                 latency_s = DETECTION_LATENCY_MS / 1000.0
                 inferred_jump_start_time = detection_time - latency_s
 
-                # Měření času mezi skoky (dwell time) na základě odhadovaných časů
-                if last_jump_time > 0: # last_jump_time nyní ukládá inferred_jump_start_time
-                    measured_dwell_time = inferred_jump_start_time - last_jump_time
-                    # Klouzavý průměr pro stabilizaci měření
-                    dwell_time_s = (dwell_time_s * 0.7) + (measured_dwell_time * 0.3)
-                    print(f"Nový tik: {dwell_time_s * 1000:.1f} ms (Latence: {DETECTION_LATENCY_MS}ms)")
+                # Získání KONSTANTNÍHO herního tiku pro predikci
+                game_tick_s = GAME_TICK_MS / 1000.0
+                print(f"Detekován skok. Synchronizuji s konstantním tikem: {GAME_TICK_MS} ms")
 
                 # Určení směru
                 if last_column != -1:
@@ -211,15 +205,13 @@ def main():
                         print(f"Změna směru: {'doprava' if new_direction == 1 else 'doleva'}")
                         direction = new_direction
 
-                last_jump_time = inferred_jump_start_time
-
-                # --- Prediktivní logika založená na kompenzovaném tiku ---
+                # --- Prediktivní logika založená na KONSTANTNÍM tiku ---
                 prediction_trigger_column = TARGET_COLUMN - (PREDICTION_OFFSET * direction)
 
                 if current_column == prediction_trigger_column and not action_taken:
 
                     # Předpověď času, kdy kostka skočí do CÍLOVÉHO sloupce
-                    predicted_target_jump_time = inferred_jump_start_time + dwell_time_s
+                    predicted_target_jump_time = inferred_jump_start_time + game_tick_s
 
                     # Cílový čas stisku je mírně po předpovězeném skoku
                     press_delay_s = PRESS_DELAY_MS_AFTER_JUMP / 1000.0
