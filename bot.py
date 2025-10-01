@@ -219,6 +219,7 @@ def main():
                 latency_s = DETECTION_LATENCY_MS / 1000.0
                 inferred_jump_start_time = detection_time - latency_s
                 game_tick_s = GAME_TICK_MS / 1000.0
+                print(f"Detekován skok. Synchronizuji s konstantním tikem: {GAME_TICK_MS} ms")
 
                 if last_column != -1:
                     new_direction = 1 if current_column > last_column else -1
