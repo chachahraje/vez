@@ -49,7 +49,7 @@ def calculate_game_region(level: int) -> dict:
     """
     # Vyhledávací tabulka pro 'top' souřadnici na základě dat od uživatele
     LEVEL_TOPS = {
-        1: 849, 2: 786, 3: 728, 4: 667, 5: 608, 6: 518,
+        1: 834, 2: 771, 3: 713, 4: 652, 5: 593, 6: 518,
         7: 791, 8: 729, 9: 669, 10: 611, 11: 552, 12: 491,
         13: 432, 14: 374, 15: 312,
     }
