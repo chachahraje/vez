@@ -243,7 +243,8 @@ def main():
             current_column, debug_frame = find_block_column(sct, LEVEL, game_region, column_width, block_color_bgr)
 
             if SHOW_DEBUG_WINDOW and debug_frame is not None:
-                cv2.imshow("Debug Window", debug_frame)
+                window_title = f"Debug Window (Top: {game_region['top']})"
+                cv2.imshow(window_title, debug_frame)
                 # Důležité pro zobrazení okna a zpracování událostí
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
