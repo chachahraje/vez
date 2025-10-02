@@ -81,11 +81,18 @@ GAME_REGION = calculate_game_region(LEVEL)
 SHOW_DEBUG_WINDOW = True
 
 
-# 2. BARVA KOSTKY (BLOCK_COLOR_RGB)
-#    Zadejte barvu kostky, kterou má bot hledat.
-#    Hodnoty jsou v RGB formátu (červená, zelená, modrá).
-#    Tvůj příklad byl RGB (236, 168, 44).
-BLOCK_COLOR_RGB = (236, 168, 44)
+# 2. BARVY KOSTEK
+#    Definice barev pro různé úrovně.
+YELLOW_BLOCK_COLOR_RGB = (236, 168, 44)  # Pro úrovně 6-15
+BLUE_BLOCK_COLOR_RGB = (45, 170, 232)    # Pro úrovně 1-5
+
+# Automatický výběr barvy podle úrovně
+if 1 <= LEVEL <= 5:
+    BLOCK_COLOR_RGB = BLUE_BLOCK_COLOR_RGB
+    print(f"Úroveň {LEVEL}: Používám modrou barvu kostky.")
+else:
+    BLOCK_COLOR_RGB = YELLOW_BLOCK_COLOR_RGB
+    print(f"Úroveň {LEVEL}: Používám žlutou barvu kostky.")
 
 #    Jak moc se může skutečná barva lišit od zadané.
 #    Větší číslo znamená větší toleranci (např. pro různé odstíny).
@@ -150,13 +157,11 @@ DETECTION_LATENCY_MS = 15
 BLOCK_COLOR_BGR = np.array(BLOCK_COLOR_RGB[::-1])
 COLUMN_WIDTH = GAME_REGION['width'] / NUM_COLUMNS
 
-def find_block_column(sct_instance):
+def find_block_column(sct_instance, level: int):
     """
-    Snímá herní obrazovku, najde kostku a vrátí její sloupec a snímek pro ladění.
-    Vrací: (column_index, debug_frame)
-    - column_index: Celočíselný index sloupce (0-9) nebo None.
-    - debug_frame: Snímek s vykreslenými konturami pro ladění, pokud je
-                   SHOW_DEBUG_WINDOW True, jinak None.
+    Snímá herní obrazovku, najde kostku(y) a vrátí její sloupec a snímek pro ladění.
+    - Pro úrovně 1-5: Detekuje skupinu modrých kostek a najde jejich společný střed.
+    - Pro úrovně 6-15: Detekuje jednu největší žlutou kostku.
     """
     try:
         img = sct_instance.grab(GAME_REGION)
@@ -172,16 +177,25 @@ def find_block_column(sct_instance):
         if not contours:
             return None, debug_frame
 
-        largest_contour = max(contours, key=cv2.contourArea)
-        area = cv2.contourArea(largest_contour)
-
-        if area < 50:
+        # Odfiltrujeme malé kontury, které jsou pravděpodobně jen šum
+        significant_contours = [c for c in contours if cv2.contourArea(c) > 50]
+        if not significant_contours:
             return None, debug_frame
 
-        if SHOW_DEBUG_WINDOW:
-            cv2.drawContours(debug_frame, [largest_contour], -1, (0, 255, 0), 2)
+        target_contour_group = None
+        # Logika pro úrovně 1-5: Zpracujeme všechny nalezené kostky jako jednu skupinu
+        if 1 <= level <= 5:
+            target_contour_group = np.vstack(significant_contours)
+            if SHOW_DEBUG_WINDOW:
+                cv2.drawContours(debug_frame, significant_contours, -1, (0, 255, 0), 2)
+        # Logika pro ostatní úrovně: Najdeme jen největší kostku
+        else:
+            target_contour_group = max(significant_contours, key=cv2.contourArea)
+            if SHOW_DEBUG_WINDOW:
+                cv2.drawContours(debug_frame, [target_contour_group], -1, (0, 255, 0), 2)
 
-        M = cv2.moments(largest_contour)
+        # Spočítáme střed (moment) z výsledné kontury nebo skupiny kontur
+        M = cv2.moments(target_contour_group)
         if M["m00"] == 0:
             return None, debug_frame
 
@@ -189,10 +203,8 @@ def find_block_column(sct_instance):
         column_index = int(center_x / COLUMN_WIDTH)
 
         if SHOW_DEBUG_WINDOW:
-            # Vykreslíme střed detekované kostky
             center_y = int(M["m01"] / M["m00"])
             cv2.circle(debug_frame, (center_x, center_y), 5, (0, 0, 255), -1)
-            # Vykreslíme dělící čáry mezi sloupci
             for i in range(1, NUM_COLUMNS):
                 line_x = int(i * COLUMN_WIDTH)
                 cv2.line(debug_frame, (line_x, 0), (line_x, GAME_REGION['height']), (255, 0, 0), 1)
@@ -215,20 +227,16 @@ def main():
     time.sleep(3)
 
     # --- Stavové proměnné bota ---
-    # Tři hlavní stavy:
-    # 'AWAITING_CYCLE': Čeká, až kostka dorazí na startovní pozici (sloupec 0).
-    # 'MEASURING': Sleduje pohyb kostky, aby změřila její rychlost.
-    # 'ARMED': Rychlost je změřena, bot je připraven k akci.
     state = 'AWAITING_CYCLE'
-
     last_column = -1
     direction = 1
-    dwell_time_s = None  # Průměrný čas, který kostka stráví v jednom sloupci
-    column_timestamps = {} # Záznamy časů pro měření rychlosti
+    dwell_time_s = None
+    column_timestamps = {}
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
-            current_column, debug_frame = find_block_column(sct)
+            # Předáváme LEVEL do detekční funkce
+            current_column, debug_frame = find_block_column(sct, LEVEL)
 
             if SHOW_DEBUG_WINDOW and debug_frame is not None:
                 cv2.imshow("Debug Window", debug_frame)
