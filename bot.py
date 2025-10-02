@@ -263,22 +263,24 @@ def main():
                 # Zohledníme latenci detekce pro přesnější měření
                 inferred_detection_time = detection_time - (DETECTION_LATENCY_MS / 1000.0)
 
-                # Aktualizace směru pohybu
+                # Aktualizace směru pohybu a detekce změny
+                direction_changed = False
                 if last_column != -1:
                     new_direction = 1 if current_column > last_column else -1
                     if new_direction != direction:
                         print(f"Změna směru: {'doprava' if new_direction == 1 else 'doleva'}")
                         direction = new_direction
+                        direction_changed = True
 
                 print(f"Stav: {state}, Sloupec: {current_column}")
 
-                # --- STAV: ČEKÁNÍ NA NOVÝ CYKLUS ---
+                # --- STAV: ČEKÁNÍ NA SYNCHRONIZACI (změnu směru) ---
                 if state == 'AWAITING_CYCLE':
-                    # Jakmile po akci detekujeme jakoukoliv kostku, okamžitě začneme měřit její rychlost.
-                    # Tím se vyhneme zablokování, pokud se kostka nikdy nedostane na sloupec 0.
-                    print(f"Detekována kostka ve sloupci {current_column}. Zahajuji nový cyklus měření.")
-                    state = 'MEASURING'
-                    column_timestamps = {current_column: inferred_detection_time}
+                    if direction_changed:
+                        print("Detekována změna směru. Zahajuji měření rychlosti.")
+                        state = 'MEASURING'
+                        # Začneme měření od aktuálního sloupce
+                        column_timestamps = {current_column: inferred_detection_time}
 
                 # --- STAV: MĚŘENÍ RYCHLOSTI ---
                 elif state == 'MEASURING':
