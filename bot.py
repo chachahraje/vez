@@ -40,7 +40,7 @@ import pyautogui
 #
 #    Zadejte úroveň hry (číslo od 1 do 15).
 #    Bot si podle toho sám upraví oblast, kterou snímá.
-LEVEL = 7  # Změňte toto číslo podle aktuální úrovně
+LEVEL = 1  # Změňte toto číslo podle aktuální úrovně
 
 def calculate_game_region(level: int) -> dict:
     """
