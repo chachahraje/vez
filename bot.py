@@ -20,9 +20,10 @@ import pyautogui
 GAME_REGION = {'left': 660, 'top': 518, 'width': 603, 'height': 64}
 
 
-# 2. BARVA KOSTKY (BLOCK_COLOR_RGB)
-#    Zadejte barvu kostky, kterou má bot hledat.
-BLOCK_COLOR_RGB = (236, 168, 44)
+# 2. BARVY KOSTEK
+#    Barvy, které bot hledá na různých levelech.
+ORANGE_BLOCK_RGB = (236, 168, 44)  # Pro levely 6-15
+BLUE_BLOCK_RGB = (45, 170, 232)    # Pro levely 1-5
 COLOR_TOLERANCE = 25
 
 
@@ -33,23 +34,9 @@ TARGET_COLUMN = 8
 
 # 4. POKROČILÉ NASTAVENÍ PRO ČASOVÁNÍ
 # ==============================================================================
-
-#    PŘEDVÍDÁNÍ (PREDICTION_OFFSET)
-#    Kolik sloupců PŘED cílovým sloupcem má bot reagovat.
 PREDICTION_OFFSET = 1
-
-#    KOMPENZACE LATENCE (DETECTION_LATENCY_MS)
-#    Odhad, kolik milisekund uplyne mezi skutečným skokem kostky a jeho
-#    detekcí skriptem. Tato hodnota se odečte od času detekce, aby se
-#    zpřesnil výpočet. Laďte po malých krůčcích.
 DETECTION_LATENCY_MS = 15
-
-#    ZPOŽDĚNÍ STISKU (PRESS_DELAY_MS_AFTER_JUMP)
-#    Kolik milisekund má bot počkat po PŘEDPOVĚZENÉM skoku do cílového
-#    sloupce, než stiskne mezerník.
 PRESS_DELAY_MS_AFTER_JUMP = 10
-
-#    DÁVKA VSTUPŮ (INPUT BURST)
 INPUT_BURST_COUNT = 3
 INPUT_BURST_DELAY_MS = 7
 
@@ -64,7 +51,9 @@ SHOW_DEBUG_WINDOW = True
 # Od této části byste neměli nic měnit.
 # ==============================================================================
 
-BLOCK_COLOR_BGR = np.array(BLOCK_COLOR_RGB[::-1])
+# Globální proměnná pro barvu, kterou bude OpenCV používat.
+# Nastavuje se dynamicky po výběru levelu.
+BLOCK_COLOR_BGR = None
 COLUMN_WIDTH = GAME_REGION['width'] / NUM_COLUMNS
 
 def find_block_column(sct_instance):
@@ -77,6 +66,7 @@ def find_block_column(sct_instance):
         img_np = np.array(img)
         frame = cv2.cvtColor(img_np, cv2.COLOR_BGRA2BGR)
 
+        # Použije globálně nastavenou BGR barvu
         lower_bound = np.maximum(0, BLOCK_COLOR_BGR - COLOR_TOLERANCE)
         upper_bound = np.minimum(255, BLOCK_COLOR_BGR + COLOR_TOLERANCE)
         mask = cv2.inRange(frame, lower_bound, upper_bound)
@@ -85,6 +75,8 @@ def find_block_column(sct_instance):
 
         column_index = None
         if contours:
+            # V případě více kostek se zaměříme na tu největší,
+            # což by měl být spolehlivý cíl, pokud jsou u sebe.
             largest_contour = max(contours, key=cv2.contourArea)
             area = cv2.contourArea(largest_contour)
 
@@ -124,11 +116,10 @@ def main():
     # --- Stavové proměnné ---
     last_column = -1
     direction = 1
-    action_taken = False
     dwell_time_s = None
     column_timestamps = {}
     is_calibrated = False
-    is_synced = False  # Zajišťuje, že začneme měřit až od začátku cyklu
+    is_synced = False
 
     print("Čekám na synchronizaci (detekce kostky ve sloupci 0)...")
 
@@ -137,25 +128,21 @@ def main():
             current_column = find_block_column(sct)
 
             if current_column is None:
-                if action_taken:
-                    print("-" * 20 + "\nAkce dokončena. Čekám na nový cyklus pro synchronizaci.")
-                    action_taken = False
-                    last_column = -1
-                    is_calibrated = False
-                    is_synced = False # Resetujeme synchronizaci
-                    column_timestamps = {}
-                    dwell_time_s = None
                 continue
 
+            # --- 1. KROK: SYNCHRONIZACE ---
             if not is_synced:
                 if current_column == 0:
                     print("Synchronizováno! Zahajuji kalibraci rychlosti.")
                     is_synced = True
                     column_timestamps = {}
                     last_column = -1
+                    continue
                 else:
+                    last_column = current_column
                     continue
 
+            # --- 2. KROK: MĚŘENÍ A PREDIKCE (až po synchronizaci) ---
             if current_column != last_column:
                 detection_time = time.perf_counter()
                 latency_s = DETECTION_LATENCY_MS / 1000.0
@@ -184,7 +171,7 @@ def main():
                         is_calibrated = True
                         print(f"Bot je zkalibrován. Rychlost: {dwell_time_s * 1000:.2f} ms/sloupec.")
 
-                if is_calibrated and not action_taken:
+                if is_calibrated:
                     prediction_trigger_column = TARGET_COLUMN - (PREDICTION_OFFSET * direction)
                     if current_column == prediction_trigger_column:
                         jumps_to_go = PREDICTION_OFFSET
@@ -204,7 +191,15 @@ def main():
                             pyautogui.press('space')
                             time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
 
-                        action_taken = True
+                        # --- OKAMŽITÝ RESET STAVU PO AKCI ---
+                        print("-" * 20 + "\nAkce dokončena. Čekám na nový cyklus pro synchronizaci.")
+                        last_column = -1
+                        is_calibrated = False
+                        is_synced = False
+                        column_timestamps = {}
+                        dwell_time_s = None
+                        time.sleep(0.5)
+                        continue
 
                 last_column = current_column
 
@@ -228,18 +223,30 @@ if __name__ == "__main__":
         except ValueError:
             print("Chyba: Zadejte prosím platné číslo.")
 
-    # Mapa 'top' souřadnic pro každý level
+    # --- Nastavení podle levelu ---
+
+    # 1. Nastavení souřadnic
     LEVEL_TOPS = {
         1: 819, 2: 756, 3: 698, 4: 637, 5: 578,
         6: 518, 7: 791, 8: 729, 9: 669, 10: 611,
         11: 552, 12: 491, 13: 432, 14: 374, 15: 312
     }
-
     GAME_REGION['top'] = LEVEL_TOPS[level]
-
     print(f"Úspěšně nastaven level {level}.")
     print(f"Herní oblast pro tento level: {GAME_REGION}")
 
+    # 2. Nastavení barvy
+    if 1 <= level <= 5:
+        selected_color = BLUE_BLOCK_RGB
+        print(f"Pro level {level} se používá modrá barva.")
+    else:
+        selected_color = ORANGE_BLOCK_RGB
+        print(f"Pro level {level} se používá oranžová barva.")
+
+    # Nastavení globální proměnné pro detekční funkci
+    BLOCK_COLOR_BGR = np.array(selected_color[::-1])
+
+    # Spuštění bota
     run_bot = input("Chcete spustit bota nyní? (ano/ne): ")
     if run_bot.lower() in ['a', 'ano', 'y', 'yes']:
         main()
