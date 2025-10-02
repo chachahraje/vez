@@ -176,8 +176,15 @@ def find_block_edges(sct_instance, game_region: dict, block_color_bgr: np.ndarra
         all_points = np.vstack([c for c in significant_contours])
         x, y, w, h = cv2.boundingRect(all_points)
 
-        left_x = x
-        right_x = x + w
+        # Posuneme sledovací body o 30px dovnitř pro stabilitu
+        left_x = x + 30
+        right_x = x + w - 30
+
+        # Pojistka pro případ, že by byl blok příliš úzký
+        if left_x >= right_x:
+            left_x = x
+            right_x = x + w
+
         center_y = y + h // 2
 
         if SHOW_DEBUG_WINDOW:
@@ -292,8 +299,8 @@ def main():
                 if current_right_column == trigger_column:
                     # --- VÝPOČET A PROVEDENÍ AKCE ---
 
-                    # Cílová pozice v pixelech (střed cílového sloupce)
-                    target_pixel = (TARGET_COLUMN * column_width) + 30
+                    # Cílová pozice v pixelech (začátek cílového sloupce)
+                    target_pixel = (TARGET_COLUMN * column_width)
                     pixels_to_go = target_pixel - right_x
 
                     # Rychlost v pixelech za sekundu
