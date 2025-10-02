@@ -273,10 +273,11 @@ def main():
 
                 # --- STAV: ČEKÁNÍ NA NOVÝ CYKLUS ---
                 if state == 'AWAITING_CYCLE':
-                    if current_column == 0:
-                        print("Detekován začátek cyklu (sloupec 0). Zahajuji měření rychlosti.")
-                        state = 'MEASURING'
-                        column_timestamps = {0: inferred_detection_time}
+                    # Jakmile po akci detekujeme jakoukoliv kostku, okamžitě začneme měřit její rychlost.
+                    # Tím se vyhneme zablokování, pokud se kostka nikdy nedostane na sloupec 0.
+                    print(f"Detekována kostka ve sloupci {current_column}. Zahajuji nový cyklus měření.")
+                    state = 'MEASURING'
+                    column_timestamps = {current_column: inferred_detection_time}
 
                 # --- STAV: MĚŘENÍ RYCHLOSTI ---
                 elif state == 'MEASURING':
