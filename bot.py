@@ -238,9 +238,8 @@ def main():
     time.sleep(3)
 
     # --- Stavové proměnné bota ---
-    state = 'AWAITING_CYCLE'
-    last_left_column = -1
-    direction = 1
+    state = 'SYNC_WAIT_RIGHT' # Nový počáteční stav
+    last_pos_info = {'left': -1, 'right': -1}
     dwell_time_s = None
     column_timestamps = {}
 
@@ -257,35 +256,36 @@ def main():
             if left_x is None:
                 continue
 
+            # --- Převod souřadnic na sloupce ---
             current_left_column = int(left_x / column_width)
+            current_right_column = int(right_x / column_width)
 
-            # --- Logika stavového automatu ---
-
-            # Detekce změny sloupce pro LEVÝ kraj
-            if current_left_column != last_left_column:
+            # --- Detekce změny pozice ---
+            pos_changed = (current_left_column != last_pos_info['left'])
+            if pos_changed:
                 detection_time = time.perf_counter()
                 inferred_detection_time = detection_time - (DETECTION_LATENCY_MS / 1000.0)
 
-                # Aktualizace směru pohybu a detekce změny
-                direction_changed = False
-                if last_left_column != -1:
-                    new_direction = 1 if current_left_column > last_left_column else -1
-                    if new_direction != direction:
-                        print(f"Změna směru na: {'doprava' if new_direction == 1 else 'doleva'}")
-                        direction = new_direction
-                        direction_changed = True
+                print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}")
 
-                current_right_column = int(right_x / column_width)
-                print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
+                # --- STAVOVÝ AUTOMAT ---
 
-                # STAV: ČEKÁNÍ NA SYNCHRONIZACI (změnu směru na 'doprava')
-                if state == 'AWAITING_CYCLE':
-                    if direction_changed and direction == 1:
-                        print("Detekován začátek průjezdu zleva. Zahajuji měření rychlosti.")
+                # 1. ČEKÁNÍ NA DOTYK PRAVÉ STRANY
+                if state == 'SYNC_WAIT_RIGHT':
+                    # Pro levely 1-4 sledujeme pravý kraj, jinak je to jedno
+                    sync_column = current_right_column if 1 <= current_level <= 4 else current_left_column
+                    if sync_column == (NUM_COLUMNS - 1):
+                        print("Synchronizace: Dosažen pravý okraj. Čekám na návrat vlevo.")
+                        state = 'SYNC_WAIT_LEFT'
+
+                # 2. ČEKÁNÍ NA DOTYK LEVÉ STRANY
+                elif state == 'SYNC_WAIT_LEFT':
+                    if current_left_column == 0:
+                        print("Synchronizace: Dosažen levý okraj. Bot je připraven k měření.")
                         state = 'MEASURING'
                         column_timestamps = {current_left_column: inferred_detection_time}
 
-                # STAV: MĚŘENÍ RYCHLOSTI (na základě levého kraje)
+                # 3. MĚŘENÍ RYCHLOSTI
                 elif state == 'MEASURING':
                     column_timestamps[current_left_column] = inferred_detection_time
                     if len(column_timestamps) > 3:
@@ -298,61 +298,49 @@ def main():
                             print("Bot je nyní aktivován a připraven k akci (ARMED).")
                             state = 'ARMED'
 
-                last_left_column = current_left_column
+                last_pos_info = {'left': current_left_column, 'right': current_right_column}
 
-            # STAV: PŘIPRAVEN K AKCI (sleduje PRAVÝ kraj)
-            if state == 'ARMED' and direction == 1:
-                current_right_column = int(right_x / column_width)
+            # 4. PŘIPRAVEN K AKCI
+            if state == 'ARMED':
+                # Pro střelbu vždy sledujeme pravý kraj
+                fire_column = int(right_x / column_width)
                 trigger_column = TARGET_COLUMN - TRIGGER_COLUMN_OFFSET
 
-                # Sledujeme, kdy pravý kraj vstoupí do spouštěcího sloupce
-                if current_right_column == trigger_column:
-                    # --- VÝPOČET A PROVEDENÍ AKCE ---
-
-                    # Cílová pozice v pixelech (začátek cílového sloupce)
+                if fire_column == trigger_column:
                     target_pixel = (TARGET_COLUMN * column_width)
                     pixels_to_go = target_pixel - right_x
-
-                    # Rychlost v pixelech za sekundu
                     pixels_per_sec = column_width / dwell_time_s
                     time_to_target_s = pixels_to_go / pixels_per_sec
-
-                    # Predikovaný čas dopadu (od teď)
                     predicted_arrival_time = time.perf_counter() + time_to_target_s
 
-                    print(f"Pravý kraj v trigger sloupci {current_right_column}. Cíl: {TARGET_COLUMN}")
+                    print(f"Pravý kraj v trigger sloupci {fire_column}. Cíl: {TARGET_COLUMN}")
                     print(f"Predikovaný čas dopadu za: {time_to_target_s * 1000:.1f} ms")
 
-                    # Přesné čekání
                     while time.perf_counter() < predicted_arrival_time:
                         pass
 
-                    # Dávka vstupů
                     print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
                     for i in range(INPUT_BURST_COUNT):
                         pyautogui.press('space')
                         time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
 
-                    # --- ZVÝŠENÍ ÚROVNĚ A AKTUALIZACE PARAMETRŮ ---
+                    # --- RESET A PŘÍPRAVA NA DALŠÍ ÚROVEŇ ---
                     current_level += 1
                     print("-" * 20)
                     print(f"Akce provedena. Postup na úroveň {current_level}.")
 
-                    if 1 <= current_level <= 5:
-                        block_color_rgb = BLUE_BLOCK_COLOR_RGB
-                    else:
-                        block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+                    if 1 <= current_level <= 5: block_color_rgb = BLUE_BLOCK_COLOR_RGB
+                    else: block_color_rgb = YELLOW_BLOCK_COLOR_RGB
 
                     game_region = calculate_game_region(current_level)
                     block_color_bgr = np.array(block_color_rgb[::-1])
                     column_width = game_region['width'] / NUM_COLUMNS
                     print(f"Nové parametry: Oblast={game_region}")
 
-                    # Reset stavu a cooldown
-                    state = 'AWAITING_CYCLE'
+                    state = 'SYNC_WAIT_RIGHT' # Reset na úplný začátek
                     dwell_time_s = None
                     column_timestamps = {}
-                    print("Aplikuji 3s cooldown...")
+                    print("Aplikuji 3s cooldown a čekám na plnou synchronizaci...")
                     time.sleep(3)
 
         print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
