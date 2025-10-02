@@ -148,11 +148,11 @@ DETECTION_LATENCY_MS = 15
 
 # Hodnoty jako BLOCK_COLOR_BGR a COLUMN_WIDTH se nyní počítají v main().
 
-def find_block_column(sct_instance, level: int, game_region: dict, column_width: float, block_color_bgr: np.ndarray):
+def find_block_edges(sct_instance, game_region: dict, block_color_bgr: np.ndarray):
     """
-    Snímá herní obrazovku, najde kostku(y) a vrátí její sloupec a snímek pro ladění.
-    - Pro úrovně 1-5: Detekuje skupinu modrých kostek a najde jejich společný střed.
-    - Pro úrovně 6-15: Detekuje jednu největší žlutou kostku.
+    Snímá herní obrazovku, najde skupinu kostek a vrátí souřadnice jejího
+    levého a pravého kraje.
+    Vrací: (left_x, right_x, debug_frame)
     """
     try:
         img = sct_instance.grab(game_region)
@@ -166,49 +166,37 @@ def find_block_column(sct_instance, level: int, game_region: dict, column_width:
 
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
-            return None, debug_frame
+            return None, None, debug_frame
 
-        # Odfiltrujeme malé kontury, které jsou pravděpodobně jen šum
         significant_contours = [c for c in contours if cv2.contourArea(c) > 50]
         if not significant_contours:
-            return None, debug_frame
+            return None, None, debug_frame
 
-        center_x = 0
-        center_y = 0
+        # Najdeme jeden velký ohraničující obdélník pro všechny nalezené kostky
+        all_points = np.vstack([c for c in significant_contours])
+        x, y, w, h = cv2.boundingRect(all_points)
 
-        # Logika pro úrovně 1-5: Najdeme ohraničující obdélník všech kostek
-        if 1 <= level <= 5:
-            all_points = np.vstack([c for c in significant_contours])
-            x, y, w, h = cv2.boundingRect(all_points)
-            center_x = x + w // 2
-            center_y = y + h // 2
-            if SHOW_DEBUG_WINDOW:
-                cv2.drawContours(debug_frame, significant_contours, -1, (0, 255, 0), 2)
-                cv2.rectangle(debug_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-        # Logika pro ostatní úrovně: Najdeme střed největší kostky
-        else:
-            largest_contour = max(significant_contours, key=cv2.contourArea)
-            M = cv2.moments(largest_contour)
-            if M["m00"] == 0:
-                return None, debug_frame
-            center_x = int(M["m10"] / M["m00"])
-            center_y = int(M["m01"] / M["m00"])
-            if SHOW_DEBUG_WINDOW:
-                cv2.drawContours(debug_frame, [largest_contour], -1, (0, 255, 0), 2)
-
-        column_index = int(center_x / column_width)
+        left_x = x
+        right_x = x + w
+        center_y = y + h // 2
 
         if SHOW_DEBUG_WINDOW:
-            cv2.circle(debug_frame, (center_x, center_y), 5, (0, 0, 255), -1)
+            # Vykreslíme všechny kontury zeleně a obdélník modře
+            cv2.drawContours(debug_frame, significant_contours, -1, (0, 255, 0), 2)
+            cv2.rectangle(debug_frame, (x, y), (right_x, y + h), (255, 0, 0), 2)
+            # Vykreslíme levý (červený) a pravý (modrý) sledovací bod
+            cv2.circle(debug_frame, (left_x, center_y), 5, (0, 0, 255), -1)
+            cv2.circle(debug_frame, (right_x, center_y), 5, (255, 0, 0), -1)
+            # Vykreslíme dělící čáry mezi sloupci
             for i in range(1, NUM_COLUMNS):
-                line_x = int(i * column_width)
-                cv2.line(debug_frame, (line_x, 0), (line_x, game_region['height']), (255, 0, 0), 1)
+                line_x = int(i * (game_region['width'] / NUM_COLUMNS))
+                cv2.line(debug_frame, (line_x, 0), (line_x, game_region['height']), (255, 255, 0), 1)
 
-        return column_index, debug_frame
+        return left_x, right_x, debug_frame
 
     except Exception as e:
         print(f"Vyskytla se chyba při zpracování obrazu: {e}")
-        return None, None
+        return None, None, None
 
 def main():
     """
@@ -237,128 +225,118 @@ def main():
 
     # --- Stavové proměnné bota ---
     state = 'AWAITING_CYCLE'
-    last_column = -1
+    last_left_column = -1
     direction = 1
     dwell_time_s = None
     column_timestamps = {}
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
-            # Předáváme všechny potřebné, lokálně vypočítané hodnoty do detekční funkce
-            current_column, debug_frame = find_block_column(sct, current_level, game_region, column_width, block_color_bgr)
+            left_x, right_x, debug_frame = find_block_edges(sct, game_region, block_color_bgr)
 
             if SHOW_DEBUG_WINDOW and debug_frame is not None:
                 window_title = f"Debug Window (Lvl: {current_level}, Top: {game_region['top']})"
                 cv2.imshow(window_title, debug_frame)
-                # Důležité pro zobrazení okna a zpracování událostí
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     break
 
-            if current_column is None:
+            if left_x is None:
                 continue
 
-            # Detekce změny sloupce je klíčová pro veškerou logiku
-            if current_column != last_column:
+            current_left_column = int(left_x / column_width)
+
+            # --- Logika stavového automatu ---
+
+            # Detekce změny sloupce pro LEVÝ kraj
+            if current_left_column != last_left_column:
                 detection_time = time.perf_counter()
-                # Zohledníme latenci detekce pro přesnější měření
                 inferred_detection_time = detection_time - (DETECTION_LATENCY_MS / 1000.0)
 
-                # Aktualizace směru pohybu a detekce změny
-                direction_changed = False
-                if last_column != -1:
-                    new_direction = 1 if current_column > last_column else -1
+                # Aktualizace směru pohybu
+                if last_left_column != -1:
+                    new_direction = 1 if current_left_column > last_left_column else -1
                     if new_direction != direction:
                         print(f"Změna směru: {'doprava' if new_direction == 1 else 'doleva'}")
                         direction = new_direction
-                        direction_changed = True
 
-                print(f"Stav: {state}, Sloupec: {current_column}")
+                print(f"Stav: {state}, Levý sloupec: {current_left_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
 
-                # --- STAV: ČEKÁNÍ NA SYNCHRONIZACI (změnu směru) ---
+                # STAV: ČEKÁNÍ NA SYNCHRONIZACI (levý kraj na sloupci 0 a pohyb doprava)
                 if state == 'AWAITING_CYCLE':
-                    if direction_changed:
-                        print("Detekována změna směru. Zahajuji měření rychlosti.")
+                    if current_left_column == 0 and direction == 1:
+                        print("Synchronizace na sloupci 0. Zahajuji měření rychlosti.")
                         state = 'MEASURING'
-                        # Začneme měření od aktuálního sloupce
-                        column_timestamps = {current_column: inferred_detection_time}
+                        column_timestamps = {current_left_column: inferred_detection_time}
 
-                # --- STAV: MĚŘENÍ RYCHLOSTI ---
+                # STAV: MĚŘENÍ RYCHLOSTI (na základě levého kraje)
                 elif state == 'MEASURING':
-                    column_timestamps[current_column] = inferred_detection_time
-
-                    # Vypočítáme rychlost z několika po sobě jdoucích skoků
+                    column_timestamps[current_left_column] = inferred_detection_time
                     if len(column_timestamps) > 3:
-                        # Seřadíme sloupce a časy, abychom mohli počítat rozdíly
                         sorted_cols = sorted(column_timestamps.keys())
                         time_diffs = [column_timestamps[sorted_cols[i]] - column_timestamps[sorted_cols[i-1]] for i in range(1, len(sorted_cols))]
-
-                        # Odstraníme případné odlehlé hodnoty (např. při změně směru)
                         stable_diffs = [d for d in time_diffs if d > 0.01]
-                        if not stable_diffs:
-                            continue
+                        if stable_diffs:
+                            dwell_time_s = np.mean(stable_diffs)
+                            print(f"Změřena rychlost: {dwell_time_s * 1000:.2f} ms na sloupec.")
+                            print("Bot je nyní aktivován a připraven k akci (ARMED).")
+                            state = 'ARMED'
 
-                        dwell_time_s = np.mean(stable_diffs)
-                        print(f"Změřena rychlost: {dwell_time_s * 1000:.2f} ms na sloupec.")
-                        print("Bot je nyní aktivován a připraven k akci (ARMED).")
-                        state = 'ARMED'
+                last_left_column = current_left_column
 
-                # --- STAV: PŘIPRAVEN K AKCI ---
-                elif state == 'ARMED':
-                    trigger_column = TARGET_COLUMN - (TRIGGER_COLUMN_OFFSET * direction)
+            # STAV: PŘIPRAVEN K AKCI (sleduje PRAVÝ kraj)
+            if state == 'ARMED' and direction == 1:
+                current_right_column = int(right_x / column_width)
+                trigger_column = TARGET_COLUMN - TRIGGER_COLUMN_OFFSET
 
-                    if current_column == trigger_column:
-                        columns_to_go = abs(TARGET_COLUMN - current_column)
-                        time_to_target_s = columns_to_go * dwell_time_s
+                # Sledujeme, kdy pravý kraj vstoupí do spouštěcího sloupce
+                if current_right_column == trigger_column:
+                    # --- VÝPOČET A PROVEDENÍ AKCE ---
 
-                        # VÝPOČET ČASU DOPADU:
-                        # Náš `detection_time` je čas, kdy kostka *vstoupila* do `trigger_column`.
-                        # `time_to_target_s` je doba, za kterou dorazí ke *vstupu* do `TARGET_COLUMN`.
-                        # Chceme však stisknout uprostřed doby, kdy je v cílovém sloupci,
-                        # proto přičteme polovinu změřeného času na sloupec (`dwell_time_s`).
-                        time_to_target_center_s = time_to_target_s + (dwell_time_s / 2.0)
-                        predicted_arrival_time = inferred_detection_time + time_to_target_center_s
+                    # Cílová pozice v pixelech (střed cílového sloupce)
+                    target_pixel = (TARGET_COLUMN * column_width) + 30
+                    pixels_to_go = target_pixel - right_x
 
-                        print(f"Kostka v trigger sloupci {current_column}. Cíl: {TARGET_COLUMN}")
-                        print(f"Predikovaný čas dopadu za: {(predicted_arrival_time - time.perf_counter()) * 1000:.1f} ms")
+                    # Rychlost v pixelech za sekundu
+                    pixels_per_sec = column_width / dwell_time_s
+                    time_to_target_s = pixels_to_go / pixels_per_sec
 
-                        # Přesné čekání pomocí "busy-wait" smyčky pro maximální přesnost.
-                        # Tato metoda je náročnější na CPU, ale zaručuje, že nepropásneme
-                        # správný okamžik kvůli nepřesnostem `time.sleep()`.
-                        while time.perf_counter() < predicted_arrival_time:
-                            pass
+                    # Predikovaný čas dopadu (od teď)
+                    predicted_arrival_time = time.perf_counter() + time_to_target_s
 
-                        # --- DÁVKA VSTUPŮ (INPUT BURST) ---
-                        print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
-                        for i in range(INPUT_BURST_COUNT):
-                            pyautogui.press('space')
-                            # Krátká pauza mezi stisky v dávce
-                            time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
+                    print(f"Pravý kraj v trigger sloupci {current_right_column}. Cíl: {TARGET_COLUMN}")
+                    print(f"Predikovaný čas dopadu za: {time_to_target_s * 1000:.1f} ms")
 
-                        # --- ZVÝŠENÍ ÚROVNĚ A AKTUALIZACE PARAMETRŮ ---
-                        current_level += 1
-                        print("-" * 20)
-                        print(f"Akce provedena. Postup na úroveň {current_level}.")
+                    # Přesné čekání
+                    while time.perf_counter() < predicted_arrival_time:
+                        pass
 
-                        # Aktualizujeme parametry pro novou úroveň
-                        if 1 <= current_level <= 5:
-                            block_color_rgb = BLUE_BLOCK_COLOR_RGB
-                        else:
-                            block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+                    # Dávka vstupů
+                    print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
+                    for i in range(INPUT_BURST_COUNT):
+                        pyautogui.press('space')
+                        time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
 
-                        game_region = calculate_game_region(current_level)
-                        block_color_bgr = np.array(block_color_rgb[::-1])
-                        column_width = game_region['width'] / NUM_COLUMNS
-                        print(f"Nové parametry: Oblast={game_region}")
-                        print("Čekám na další cyklus.")
+                    # --- ZVÝŠENÍ ÚROVNĚ A AKTUALIZACE PARAMETRŮ ---
+                    current_level += 1
+                    print("-" * 20)
+                    print(f"Akce provedena. Postup na úroveň {current_level}.")
 
-                        state = 'AWAITING_CYCLE'
-                        dwell_time_s = None
-                        column_timestamps = {}
-                        # 3-sekundový cooldown pro stabilizaci další úrovně
-                        print("Aplikuji 3s cooldown...")
-                        time.sleep(3)
+                    if 1 <= current_level <= 5:
+                        block_color_rgb = BLUE_BLOCK_COLOR_RGB
+                    else:
+                        block_color_rgb = YELLOW_BLOCK_COLOR_RGB
 
-                last_column = current_column
+                    game_region = calculate_game_region(current_level)
+                    block_color_bgr = np.array(block_color_rgb[::-1])
+                    column_width = game_region['width'] / NUM_COLUMNS
+                    print(f"Nové parametry: Oblast={game_region}")
+
+                    # Reset stavu a cooldown
+                    state = 'AWAITING_CYCLE'
+                    dwell_time_s = None
+                    column_timestamps = {}
+                    print("Aplikuji 3s cooldown...")
+                    time.sleep(3)
 
         print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
         if SHOW_DEBUG_WINDOW:
