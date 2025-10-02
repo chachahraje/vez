@@ -259,19 +259,22 @@ def main():
                 detection_time = time.perf_counter()
                 inferred_detection_time = detection_time - (DETECTION_LATENCY_MS / 1000.0)
 
-                # Aktualizace směru pohybu
+                # Aktualizace směru pohybu a detekce změny
+                direction_changed = False
                 if last_left_column != -1:
                     new_direction = 1 if current_left_column > last_left_column else -1
                     if new_direction != direction:
-                        print(f"Změna směru: {'doprava' if new_direction == 1 else 'doleva'}")
+                        print(f"Změna směru na: {'doprava' if new_direction == 1 else 'doleva'}")
                         direction = new_direction
+                        direction_changed = True
 
-                print(f"Stav: {state}, Levý sloupec: {current_left_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
+                current_right_column = int(right_x / column_width)
+                print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
 
-                # STAV: ČEKÁNÍ NA SYNCHRONIZACI (levý kraj na sloupci 0 a pohyb doprava)
+                # STAV: ČEKÁNÍ NA SYNCHRONIZACI (změnu směru na 'doprava')
                 if state == 'AWAITING_CYCLE':
-                    if current_left_column == 0 and direction == 1:
-                        print("Synchronizace na sloupci 0. Zahajuji měření rychlosti.")
+                    if direction_changed and direction == 1:
+                        print("Detekován začátek průjezdu zleva. Zahajuji měření rychlosti.")
                         state = 'MEASURING'
                         column_timestamps = {current_left_column: inferred_detection_time}
 
