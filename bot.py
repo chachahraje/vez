@@ -185,7 +185,7 @@ def find_block_column(sct_instance, level: int, game_region: dict, column_width:
 
         # Logika pro úrovně 1-5: Najdeme ohraničující obdélník všech kostek
         if 1 <= level <= 5:
-            all_points = np.vstack(c for c in significant_contours)
+            all_points = np.vstack([c for c in significant_contours])
             x, y, w, h = cv2.boundingRect(all_points)
             center_x = x + w // 2
             center_y = y + h // 2
