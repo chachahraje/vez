@@ -72,8 +72,8 @@ def calculate_game_region(level: int) -> dict:
         'height': BASE_HEIGHT
     }
 
-# Vypočítáme herní oblast na základě zvolené úrovně
-GAME_REGION = calculate_game_region(LEVEL)
+# Herní oblast (GAME_REGION) se nyní počítá až uvnitř funkce main(),
+# aby se zajistilo, že se použijí správné hodnoty pro zvolenou úroveň.
 
 # 1.1 OKNO PRO LADĚNÍ (DEBUG WINDOW)
 #     Pokud nastavíte na True, bot zobrazí okno, ve kterém v reálném čase
@@ -153,24 +153,22 @@ DETECTION_LATENCY_MS = 15
 # Od této části byste neměli nic měnit, pokud nevíte, co děláte.
 # ==============================================================================
 
-# Převedení barvy z RGB na BGR (formát, který používá OpenCV)
-BLOCK_COLOR_BGR = np.array(BLOCK_COLOR_RGB[::-1])
-COLUMN_WIDTH = GAME_REGION['width'] / NUM_COLUMNS
+# Hodnoty jako BLOCK_COLOR_BGR a COLUMN_WIDTH se nyní počítají v main().
 
-def find_block_column(sct_instance, level: int):
+def find_block_column(sct_instance, level: int, game_region: dict, column_width: float, block_color_bgr: np.ndarray):
     """
     Snímá herní obrazovku, najde kostku(y) a vrátí její sloupec a snímek pro ladění.
     - Pro úrovně 1-5: Detekuje skupinu modrých kostek a najde jejich společný střed.
     - Pro úrovně 6-15: Detekuje jednu největší žlutou kostku.
     """
     try:
-        img = sct_instance.grab(GAME_REGION)
+        img = sct_instance.grab(game_region)
         img_np = np.array(img)
         frame = cv2.cvtColor(img_np, cv2.COLOR_BGRA2BGR)
         debug_frame = frame.copy() if SHOW_DEBUG_WINDOW else None
 
-        lower_bound = np.maximum(0, BLOCK_COLOR_BGR - COLOR_TOLERANCE)
-        upper_bound = np.minimum(255, BLOCK_COLOR_BGR + COLOR_TOLERANCE)
+        lower_bound = np.maximum(0, block_color_bgr - COLOR_TOLERANCE)
+        upper_bound = np.minimum(255, block_color_bgr + COLOR_TOLERANCE)
         mask = cv2.inRange(frame, lower_bound, upper_bound)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -200,14 +198,14 @@ def find_block_column(sct_instance, level: int):
             return None, debug_frame
 
         center_x = int(M["m10"] / M["m00"])
-        column_index = int(center_x / COLUMN_WIDTH)
+        column_index = int(center_x / column_width)
 
         if SHOW_DEBUG_WINDOW:
             center_y = int(M["m01"] / M["m00"])
             cv2.circle(debug_frame, (center_x, center_y), 5, (0, 0, 255), -1)
             for i in range(1, NUM_COLUMNS):
-                line_x = int(i * COLUMN_WIDTH)
-                cv2.line(debug_frame, (line_x, 0), (line_x, GAME_REGION['height']), (255, 0, 0), 1)
+                line_x = int(i * column_width)
+                cv2.line(debug_frame, (line_x, 0), (line_x, game_region['height']), (255, 0, 0), 1)
 
         return column_index, debug_frame
 
@@ -219,7 +217,13 @@ def main():
     """
     Hlavní smyčka bota s dynamickým měřením rychlosti a prediktivním časováním.
     """
+    # --- Inicializace na základě nastavení ---
+    game_region = calculate_game_region(LEVEL)
+    block_color_bgr = np.array(BLOCK_COLOR_RGB[::-1])
+    column_width = game_region['width'] / NUM_COLUMNS
+
     print("="*50)
+    print(f"Úroveň: {LEVEL}, Cílová oblast: {game_region}")
     print("Bot s dynamickým časováním se spouští za 3 sekundy...")
     print("PŘEPNĚTE SE DO OKNA SE HROU!")
     print("Pro ukončení bota stiskněte a držte klávesu 'q'.")
@@ -235,8 +239,8 @@ def main():
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
-            # Předáváme LEVEL do detekční funkce
-            current_column, debug_frame = find_block_column(sct, LEVEL)
+            # Předáváme všechny potřebné, lokálně vypočítané hodnoty do detekční funkce
+            current_column, debug_frame = find_block_column(sct, LEVEL, game_region, column_width, block_color_bgr)
 
             if SHOW_DEBUG_WINDOW and debug_frame is not None:
                 cv2.imshow("Debug Window", debug_frame)
