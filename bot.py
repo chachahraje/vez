@@ -256,6 +256,7 @@ def main():
     # --- Stavové proměnné bota ---
     state = 'SYNC_WAIT_RIGHT'
     last_pos_info = {'left': -1, 'time': 0}
+    direction = 1 # Spolehlivé sledování směru
     dwell_time_samples = []
 
     with mss.mss() as sct:
@@ -274,73 +275,78 @@ def main():
             current_left_column = int(left_x / column_width)
             current_right_column = int(right_x / column_width)
 
-            # --- Kontinuální měření rychlosti ---
+            # --- Kontinuální měření rychlosti a aktualizace směru ---
             if current_left_column != last_pos_info['left']:
                 current_time = time.perf_counter()
+
+                # Aktualizace směru POUZE při změně sloupce
+                if last_pos_info['left'] != -1:
+                    new_direction = 1 if current_left_column > last_pos_info['left'] else -1
+                    if new_direction != direction:
+                        print(f"Změna směru na: {'doprava' if new_direction == 1 else 'doleva'}")
+                        direction = new_direction
+
+                # Přidání vzorku rychlosti
                 if last_pos_info['time'] > 0:
                     time_diff = current_time - last_pos_info['time']
                     dwell_time_samples.append(time_diff)
+
                 last_pos_info = {'left': current_left_column, 'time': current_time}
 
                 stable_dwell_time, dwell_time_samples = calculate_stable_dwell_time(dwell_time_samples)
 
-                # --- STAVOVÝ AUTOMAT PRO SYNCHRONIZACI A "OZBROJENÍ" ---
-                print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}")
+                # --- STAVOVÝ AUTOMAT PRO SYNCHRONIZACI ---
+                print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
 
-                # 1. ČEKÁNÍ NA DOTYK PRAVÉ STRANY
                 if state == 'SYNC_WAIT_RIGHT':
                     sync_col = current_right_column if 1 <= current_level <= 4 else current_left_column
                     if sync_col >= (NUM_COLUMNS - 1):
                         print("SYNC: Dosažen pravý okraj. Čekám na návrat vlevo.")
                         state = 'SYNC_WAIT_LEFT'
-
-                # 2. ČEKÁNÍ NA DOTYK LEVÉ STRANY
                 elif state == 'SYNC_WAIT_LEFT':
                     if current_left_column == 0:
                         print("SYNC: Dosažen levý okraj. Bot je nyní aktivován (ARMED).")
                         state = 'ARMED'
 
-            # 3. PŘIPRAVEN K AKCI
-            if state == 'ARMED':
-                direction = 1 if current_left_column > last_pos_info['left'] else -1
-                if direction == 1 and stable_dwell_time is not None:
-                    fire_column = int(right_x / column_width)
-                    trigger_column = TARGET_COLUMN - TRIGGER_COLUMN_OFFSET
+            # --- LOGIKA PROVEDENÍ AKCE ---
+            if state == 'ARMED' and direction == 1 and stable_dwell_time is not None:
+                fire_column = int(right_x / column_width)
+                trigger_column = TARGET_COLUMN - TRIGGER_COLUMN_OFFSET
 
-                    if fire_column == trigger_column:
-                        target_pixel = (TARGET_COLUMN * column_width)
-                        pixels_to_go = target_pixel - right_x
-                        pixels_per_sec = column_width / stable_dwell_time
-                        time_to_target_s = pixels_to_go / pixels_per_sec
-                        predicted_arrival_time = time.perf_counter() + time_to_target_s
+                if fire_column == trigger_column:
+                    target_pixel = (TARGET_COLUMN * column_width)
+                    pixels_to_go = target_pixel - right_x
+                    pixels_per_sec = column_width / stable_dwell_time
+                    time_to_target_s = pixels_to_go / pixels_per_sec
+                    predicted_arrival_time = time.perf_counter() + time_to_target_s
 
-                        print(f"Pravý kraj v trigger sloupci {fire_column}. Cíl: {TARGET_COLUMN}")
-                        print(f"Predikovaný čas dopadu za: {time_to_target_s * 1000:.1f} ms")
+                    print(f"Pravý kraj v trigger sloupci {fire_column}. Cíl: {TARGET_COLUMN}")
+                    print(f"Predikovaný čas dopadu za: {time_to_target_s * 1000:.1f} ms")
 
-                        while time.perf_counter() < predicted_arrival_time: pass
+                    while time.perf_counter() < predicted_arrival_time: pass
 
-                        print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
-                        for i in range(INPUT_BURST_COUNT):
-                            pyautogui.press('space')
-                            time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
+                    print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
+                    for i in range(INPUT_BURST_COUNT):
+                        pyautogui.press('space')
+                        time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
 
-                        # --- RESET A PŘÍPRAVA NA DALŠÍ ÚROVEŇ ---
-                        current_level += 1
-                        print("-" * 20)
-                        print(f"Akce provedena. Postup na úroveň {current_level}.")
+                    # --- RESET ---
+                    current_level += 1
+                    print("-" * 20)
+                    print(f"Akce provedena. Postup na úroveň {current_level}.")
 
-                        if 1 <= current_level <= 5: block_color_rgb = BLUE_BLOCK_COLOR_RGB
-                        else: block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+                    if 1 <= current_level <= 5: block_color_rgb = BLUE_BLOCK_COLOR_RGB
+                    else: block_color_rgb = YELLOW_BLOCK_COLOR_RGB
 
-                        game_region = calculate_game_region(current_level)
-                        block_color_bgr = np.array(block_color_rgb[::-1])
-                        column_width = game_region['width'] / NUM_COLUMNS
-                        print(f"Nové parametry: Oblast={game_region}")
+                    game_region = calculate_game_region(current_level)
+                    block_color_bgr = np.array(block_color_rgb[::-1])
+                    column_width = game_region['width'] / NUM_COLUMNS
+                    print(f"Nové parametry: Oblast={game_region}")
 
-                        state = 'SYNC_WAIT_RIGHT'
-                        dwell_time_samples.clear() # Vyčistíme historii rychlostí
-                        print("Aplikuji 3s cooldown a čekám na plnou synchronizaci...")
-                        time.sleep(3)
+                    state = 'SYNC_WAIT_RIGHT'
+                    dwell_time_samples.clear()
+                    print("Aplikuji 3s cooldown a čekám na plnou synchronizaci...")
+                    time.sleep(3)
 
         print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
         if SHOW_DEBUG_WINDOW:
