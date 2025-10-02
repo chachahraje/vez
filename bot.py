@@ -180,28 +180,32 @@ def find_block_column(sct_instance, level: int, game_region: dict, column_width:
         if not significant_contours:
             return None, debug_frame
 
-        target_contour_group = None
-        # Logika pro úrovně 1-5: Zpracujeme všechny nalezené kostky jako jednu skupinu
+        center_x = 0
+        center_y = 0
+
+        # Logika pro úrovně 1-5: Najdeme ohraničující obdélník všech kostek
         if 1 <= level <= 5:
-            target_contour_group = np.vstack(significant_contours)
+            all_points = np.vstack(c for c in significant_contours)
+            x, y, w, h = cv2.boundingRect(all_points)
+            center_x = x + w // 2
+            center_y = y + h // 2
             if SHOW_DEBUG_WINDOW:
                 cv2.drawContours(debug_frame, significant_contours, -1, (0, 255, 0), 2)
-        # Logika pro ostatní úrovně: Najdeme jen největší kostku
+                cv2.rectangle(debug_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+        # Logika pro ostatní úrovně: Najdeme střed největší kostky
         else:
-            target_contour_group = max(significant_contours, key=cv2.contourArea)
+            largest_contour = max(significant_contours, key=cv2.contourArea)
+            M = cv2.moments(largest_contour)
+            if M["m00"] == 0:
+                return None, debug_frame
+            center_x = int(M["m10"] / M["m00"])
+            center_y = int(M["m01"] / M["m00"])
             if SHOW_DEBUG_WINDOW:
-                cv2.drawContours(debug_frame, [target_contour_group], -1, (0, 255, 0), 2)
+                cv2.drawContours(debug_frame, [largest_contour], -1, (0, 255, 0), 2)
 
-        # Spočítáme střed (moment) z výsledné kontury nebo skupiny kontur
-        M = cv2.moments(target_contour_group)
-        if M["m00"] == 0:
-            return None, debug_frame
-
-        center_x = int(M["m10"] / M["m00"])
         column_index = int(center_x / column_width)
 
         if SHOW_DEBUG_WINDOW:
-            center_y = int(M["m01"] / M["m00"])
             cv2.circle(debug_frame, (center_x, center_y), 5, (0, 0, 255), -1)
             for i in range(1, NUM_COLUMNS):
                 line_x = int(i * column_width)
