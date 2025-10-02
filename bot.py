@@ -38,9 +38,8 @@ import pyautogui
 #    - 'width' = (pravý dolní X) - (levý horní X)
 #    - 'height' = (pravý dolní Y) - (levý horní Y)
 #
-#    Zadejte úroveň hry (číslo od 1 do 15).
-#    Bot si podle toho sám upraví oblast, kterou snímá.
-LEVEL = 1  # Změňte toto číslo podle aktuální úrovně
+#    Zadejte úroveň, na které má bot začít (číslo od 1 do 15).
+STARTING_LEVEL = 1
 
 def calculate_game_region(level: int) -> dict:
     """
@@ -86,13 +85,7 @@ SHOW_DEBUG_WINDOW = True
 YELLOW_BLOCK_COLOR_RGB = (236, 168, 44)  # Pro úrovně 6-15
 BLUE_BLOCK_COLOR_RGB = (45, 170, 232)    # Pro úrovně 1-5
 
-# Automatický výběr barvy podle úrovně
-if 1 <= LEVEL <= 5:
-    BLOCK_COLOR_RGB = BLUE_BLOCK_COLOR_RGB
-    print(f"Úroveň {LEVEL}: Používám modrou barvu kostky.")
-else:
-    BLOCK_COLOR_RGB = YELLOW_BLOCK_COLOR_RGB
-    print(f"Úroveň {LEVEL}: Používám žlutou barvu kostky.")
+# Výběr barvy (BLOCK_COLOR_RGB) se nyní provádí dynamicky uvnitř funkce main().
 
 #    Jak moc se může skutečná barva lišit od zadané.
 #    Větší číslo znamená větší toleranci (např. pro různé odstíny).
@@ -221,13 +214,21 @@ def main():
     """
     Hlavní smyčka bota s dynamickým měřením rychlosti a prediktivním časováním.
     """
-    # --- Inicializace na základě nastavení ---
-    game_region = calculate_game_region(LEVEL)
-    block_color_bgr = np.array(BLOCK_COLOR_RGB[::-1])
+    # --- Lokální proměnné pro správu hry ---
+    current_level = STARTING_LEVEL
+
+    # Prvotní nastavení herních parametrů
+    if 1 <= current_level <= 5:
+        block_color_rgb = BLUE_BLOCK_COLOR_RGB
+    else:
+        block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+
+    game_region = calculate_game_region(current_level)
+    block_color_bgr = np.array(block_color_rgb[::-1])
     column_width = game_region['width'] / NUM_COLUMNS
 
     print("="*50)
-    print(f"Úroveň: {LEVEL}, Cílová oblast: {game_region}")
+    print(f"Start na úrovni: {current_level}, Cílová oblast: {game_region}")
     print("Bot s dynamickým časováním se spouští za 3 sekundy...")
     print("PŘEPNĚTE SE DO OKNA SE HROU!")
     print("Pro ukončení bota stiskněte a držte klávesu 'q'.")
@@ -244,10 +245,10 @@ def main():
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
             # Předáváme všechny potřebné, lokálně vypočítané hodnoty do detekční funkce
-            current_column, debug_frame = find_block_column(sct, LEVEL, game_region, column_width, block_color_bgr)
+            current_column, debug_frame = find_block_column(sct, current_level, game_region, column_width, block_color_bgr)
 
             if SHOW_DEBUG_WINDOW and debug_frame is not None:
-                window_title = f"Debug Window (Top: {game_region['top']})"
+                window_title = f"Debug Window (Lvl: {current_level}, Top: {game_region['top']})"
                 cv2.imshow(window_title, debug_frame)
                 # Důležité pro zobrazení okna a zpracování událostí
                 if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -331,9 +332,23 @@ def main():
                             # Krátká pauza mezi stisky v dávce
                             time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
 
-                        # Po akci se bot resetuje a čeká na další cyklus
+                        # --- ZVÝŠENÍ ÚROVNĚ A AKTUALIZACE PARAMETRŮ ---
+                        current_level += 1
                         print("-" * 20)
-                        print("Akce provedena. Čekám na další cyklus od sloupce 0.")
+                        print(f"Akce provedena. Postup na úroveň {current_level}.")
+
+                        # Aktualizujeme parametry pro novou úroveň
+                        if 1 <= current_level <= 5:
+                            block_color_rgb = BLUE_BLOCK_COLOR_RGB
+                        else:
+                            block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+
+                        game_region = calculate_game_region(current_level)
+                        block_color_bgr = np.array(block_color_rgb[::-1])
+                        column_width = game_region['width'] / NUM_COLUMNS
+                        print(f"Nové parametry: Oblast={game_region}")
+                        print("Čekám na další cyklus.")
+
                         state = 'AWAITING_CYCLE'
                         dwell_time_s = None
                         column_timestamps = {}
