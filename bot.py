@@ -38,8 +38,45 @@ import pyautogui
 #    - 'width' = (pravý dolní X) - (levý horní X)
 #    - 'height' = (pravý dolní Y) - (levý horní Y)
 #
-# Příklad:
-GAME_REGION = {'left': 660, 'top': 518, 'width': 603, 'height': 64}
+#    Zadejte úroveň hry (číslo od 1 do 15).
+#    Bot si podle toho sám upraví oblast, kterou snímá.
+LEVEL = 7  # Změňte toto číslo podle aktuální úrovně
+
+def calculate_game_region(level: int) -> dict:
+    """
+    Vypočítá souřadnice herní oblasti na základě zvolené úrovně.
+    Logika je založena na referenčních bodech z úrovní 6 a 7,
+    což umožňuje flexibilní přizpůsobení pro různé úrovně.
+    """
+    # Referenční hodnoty (změřeno pro konkrétní nastavení hry)
+    LEVEL_6_TOP = 518
+    LEVEL_7_TOP = 582
+
+    # Vypočítáme vertikální posun na jednu úroveň
+    PIXELS_PER_LEVEL = LEVEL_7_TOP - LEVEL_6_TOP  # Očekáváme 64
+
+    # Základní hodnoty, které se nemění
+    BASE_LEFT = 660
+    BASE_WIDTH = 603
+    BASE_HEIGHT = 64
+
+    # Výpočet 'top' pro aktuální úroveň relativně k úrovni 6
+    current_top = LEVEL_6_TOP + (level - 6) * PIXELS_PER_LEVEL
+
+    return {
+        'left': BASE_LEFT,
+        'top': int(current_top),
+        'width': BASE_WIDTH,
+        'height': BASE_HEIGHT
+    }
+
+# Vypočítáme herní oblast na základě zvolené úrovně
+GAME_REGION = calculate_game_region(LEVEL)
+
+# 1.1 OKNO PRO LADĚNÍ (DEBUG WINDOW)
+#     Pokud nastavíte na True, bot zobrazí okno, ve kterém v reálném čase
+#     uvidíte, co snímá, a kde detekoval kostku. Užitečné pro ladění.
+SHOW_DEBUG_WINDOW = True
 
 
 # 2. BARVA KOSTKY (BLOCK_COLOR_RGB)
@@ -93,6 +130,15 @@ INPUT_BURST_COUNT = 3
 #    Doporučená hodnota: 5 až 10 ms.
 INPUT_BURST_DELAY_MS = 7
 
+
+# 5. KOMPENZACE LATENCE
+#    Každý systém má malé zpoždění mezi tím, co se stane na obrazovce,
+#    a tím, kdy to náš skript zjistí. Tato hodnota (v milisekundách)
+#    se odečte od naměřeného času, aby byly výpočty přesnější.
+#    Dobrá startovní hodnota je 10-20 ms. Laďte podle potřeby.
+DETECTION_LATENCY_MS = 15
+
+
 # ==============================================================================
 # --- KÓD BOTA ---
 # Od této části byste neměli nic měnit, pokud nevíte, co děláte.
@@ -104,13 +150,17 @@ COLUMN_WIDTH = GAME_REGION['width'] / NUM_COLUMNS
 
 def find_block_column(sct_instance):
     """
-    Snímá herní obrazovku, najde kostku a vrátí index jejího sloupce (0-9).
-    Pokud kostku nenajde, vrátí None.
+    Snímá herní obrazovku, najde kostku a vrátí její sloupec a snímek pro ladění.
+    Vrací: (column_index, debug_frame)
+    - column_index: Celočíselný index sloupce (0-9) nebo None.
+    - debug_frame: Snímek s vykreslenými konturami pro ladění, pokud je
+                   SHOW_DEBUG_WINDOW True, jinak None.
     """
     try:
         img = sct_instance.grab(GAME_REGION)
         img_np = np.array(img)
         frame = cv2.cvtColor(img_np, cv2.COLOR_BGRA2BGR)
+        debug_frame = frame.copy() if SHOW_DEBUG_WINDOW else None
 
         lower_bound = np.maximum(0, BLOCK_COLOR_BGR - COLOR_TOLERANCE)
         upper_bound = np.minimum(255, BLOCK_COLOR_BGR + COLOR_TOLERANCE)
@@ -118,26 +168,38 @@ def find_block_column(sct_instance):
 
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
         if not contours:
-            return None
+            return None, debug_frame
 
         largest_contour = max(contours, key=cv2.contourArea)
         area = cv2.contourArea(largest_contour)
 
         if area < 50:
-            return None
+            return None, debug_frame
+
+        if SHOW_DEBUG_WINDOW:
+            cv2.drawContours(debug_frame, [largest_contour], -1, (0, 255, 0), 2)
 
         M = cv2.moments(largest_contour)
         if M["m00"] == 0:
-            return None
+            return None, debug_frame
 
         center_x = int(M["m10"] / M["m00"])
         column_index = int(center_x / COLUMN_WIDTH)
 
-        return column_index
+        if SHOW_DEBUG_WINDOW:
+            # Vykreslíme střed detekované kostky
+            center_y = int(M["m01"] / M["m00"])
+            cv2.circle(debug_frame, (center_x, center_y), 5, (0, 0, 255), -1)
+            # Vykreslíme dělící čáry mezi sloupci
+            for i in range(1, NUM_COLUMNS):
+                line_x = int(i * COLUMN_WIDTH)
+                cv2.line(debug_frame, (line_x, 0), (line_x, GAME_REGION['height']), (255, 0, 0), 1)
+
+        return column_index, debug_frame
 
     except Exception as e:
         print(f"Vyskytla se chyba při zpracování obrazu: {e}")
-        return None
+        return None, None
 
 def main():
     """
@@ -164,13 +226,22 @@ def main():
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
-            current_column = find_block_column(sct)
+            current_column, debug_frame = find_block_column(sct)
+
+            if SHOW_DEBUG_WINDOW and debug_frame is not None:
+                cv2.imshow("Debug Window", debug_frame)
+                # Důležité pro zobrazení okna a zpracování událostí
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    break
+
             if current_column is None:
                 continue
 
             # Detekce změny sloupce je klíčová pro veškerou logiku
             if current_column != last_column:
                 detection_time = time.perf_counter()
+                # Zohledníme latenci detekce pro přesnější měření
+                inferred_detection_time = detection_time - (DETECTION_LATENCY_MS / 1000.0)
 
                 # Aktualizace směru pohybu
                 if last_column != -1:
@@ -186,11 +257,11 @@ def main():
                     if current_column == 0:
                         print("Detekován začátek cyklu (sloupec 0). Zahajuji měření rychlosti.")
                         state = 'MEASURING'
-                        column_timestamps = {0: detection_time}
+                        column_timestamps = {0: inferred_detection_time}
 
                 # --- STAV: MĚŘENÍ RYCHLOSTI ---
                 elif state == 'MEASURING':
-                    column_timestamps[current_column] = detection_time
+                    column_timestamps[current_column] = inferred_detection_time
 
                     # Vypočítáme rychlost z několika po sobě jdoucích skoků
                     if len(column_timestamps) > 3:
@@ -222,15 +293,16 @@ def main():
                         # Chceme však stisknout uprostřed doby, kdy je v cílovém sloupci,
                         # proto přičteme polovinu změřeného času na sloupec (`dwell_time_s`).
                         time_to_target_center_s = time_to_target_s + (dwell_time_s / 2.0)
-                        predicted_arrival_time = detection_time + time_to_target_center_s
+                        predicted_arrival_time = inferred_detection_time + time_to_target_center_s
 
                         print(f"Kostka v trigger sloupci {current_column}. Cíl: {TARGET_COLUMN}")
                         print(f"Predikovaný čas dopadu za: {(predicted_arrival_time - time.perf_counter()) * 1000:.1f} ms")
 
-                        # Přesné čekání na vypočítaný čas
-                        wait_time = predicted_arrival_time - time.perf_counter()
-                        if wait_time > 0:
-                            time.sleep(wait_time)
+                        # Přesné čekání pomocí "busy-wait" smyčky pro maximální přesnost.
+                        # Tato metoda je náročnější na CPU, ale zaručuje, že nepropásneme
+                        # správný okamžik kvůli nepřesnostem `time.sleep()`.
+                        while time.perf_counter() < predicted_arrival_time:
+                            pass
 
                         # --- DÁVKA VSTUPŮ (INPUT BURST) ---
                         print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
@@ -251,6 +323,8 @@ def main():
                 last_column = current_column
 
         print("\nKlávesa 'q' stisknuta, bot se ukončuje.")
+        if SHOW_DEBUG_WINDOW:
+            cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     print("Vítejte v botovi pro skládání věže!")
