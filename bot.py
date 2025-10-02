@@ -44,28 +44,30 @@ LEVEL = 7  # Změňte toto číslo podle aktuální úrovně
 
 def calculate_game_region(level: int) -> dict:
     """
-    Vypočítá souřadnice herní oblasti na základě zvolené úrovně.
-    Logika je založena na referenčních bodech z úrovní 6 a 7,
-    což umožňuje flexibilní přizpůsobení pro různé úrovně.
+    Vrátí souřadnice herní oblasti na základě zvolené úrovně.
+    Používá vyhledávací tabulku s přesnými hodnotami 'top' pro každou úroveň.
     """
-    # Referenční hodnoty (změřeno pro konkrétní nastavení hry)
-    LEVEL_6_TOP = 518
-    LEVEL_7_TOP = 582
+    # Vyhledávací tabulka pro 'top' souřadnici na základě dat od uživatele
+    LEVEL_TOPS = {
+        1: 819, 2: 756, 3: 698, 4: 637, 5: 578, 6: 518,
+        7: 791, 8: 729, 9: 669, 10: 611, 11: 552, 12: 491,
+        13: 432, 14: 374, 15: 312,
+    }
 
-    # Vypočítáme vertikální posun na jednu úroveň
-    PIXELS_PER_LEVEL = LEVEL_7_TOP - LEVEL_6_TOP  # Očekáváme 64
+    if level not in LEVEL_TOPS:
+        print(f"Chyba: Neplatná úroveň {level}. Zvolte úroveň od 1 do 15.")
+        # V případě neplatného vstupu použijeme jako zálohu úroveň 1
+        print("Používám výchozí úroveň 1.")
+        level = 1
 
     # Základní hodnoty, které se nemění
     BASE_LEFT = 660
     BASE_WIDTH = 603
     BASE_HEIGHT = 64
 
-    # Výpočet 'top' pro aktuální úroveň relativně k úrovni 6
-    current_top = LEVEL_6_TOP + (level - 6) * PIXELS_PER_LEVEL
-
     return {
         'left': BASE_LEFT,
-        'top': int(current_top),
+        'top': LEVEL_TOPS[level],
         'width': BASE_WIDTH,
         'height': BASE_HEIGHT
     }
