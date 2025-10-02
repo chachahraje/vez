@@ -15,9 +15,9 @@ import pyautogui
 # ==============================================================================
 
 # 1. OBLAST HRY (GAME_REGION)
-#    Toto je základní nastavení, které se dynamicky upravuje podle zvoleného levelu.
-#    Výchozí hodnoty jsou pro Level 6 a 7, od kterých se odvíjí zbytek.
-GAME_REGION = {'left': 880, 'top': 675, 'width': 795, 'height': 75}
+#    Základní hodnoty pro 'left', 'width', 'height' jsou nastaveny podle Levelu 6.
+#    Hodnota 'top' se dynamicky mění podle zvoleného levelu.
+GAME_REGION = {'left': 660, 'top': 518, 'width': 603, 'height': 64}
 
 
 # 2. BARVA KOSTKY (BLOCK_COLOR_RGB)
@@ -147,19 +147,15 @@ def main():
                     dwell_time_s = None
                 continue
 
-            # --- 1. KROK: SYNCHRONIZACE ---
-            # Bot nebude nic dělat, dokud neuvidí kostku ve sloupci 0.
             if not is_synced:
                 if current_column == 0:
                     print("Synchronizováno! Zahajuji kalibraci rychlosti.")
                     is_synced = True
-                    column_timestamps = {} # Začínáme s čistým měřením
-                    last_column = -1 # KLÍČOVÁ OPRAVA: Resetujeme last_column pro správné první měření
+                    column_timestamps = {}
+                    last_column = -1
                 else:
-                    # Jen čekáme, nic neděláme
                     continue
 
-            # --- 2. KROK: MĚŘENÍ A PREDIKCE (až po synchronizaci) ---
             if current_column != last_column:
                 detection_time = time.perf_counter()
                 latency_s = DETECTION_LATENCY_MS / 1000.0
@@ -170,7 +166,6 @@ def main():
                     if direction != new_direction:
                         direction = new_direction
                         print(f"Změna směru: {'doprava' if direction == 1 else 'doleva'}")
-                        # Při změně směru resetujeme kalibraci a čekáme na nový sync
                         is_calibrated = False
                         is_synced = False
                         column_timestamps = {}
@@ -180,7 +175,6 @@ def main():
 
                 column_timestamps[current_column] = inferred_jump_start_time
 
-                # Kalibrace rychlosti
                 if not is_calibrated and len(column_timestamps) > 2:
                     sorted_cols = sorted(column_timestamps.keys())
                     time_diffs = [column_timestamps[sorted_cols[i]] - column_timestamps[sorted_cols[i-1]] for i in range(1, len(sorted_cols))]
@@ -190,7 +184,6 @@ def main():
                         is_calibrated = True
                         print(f"Bot je zkalibrován. Rychlost: {dwell_time_s * 1000:.2f} ms/sloupec.")
 
-                # Predikce a Akce
                 if is_calibrated and not action_taken:
                     prediction_trigger_column = TARGET_COLUMN - (PREDICTION_OFFSET * direction)
                     if current_column == prediction_trigger_column:
@@ -212,7 +205,6 @@ def main():
                             time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
 
                         action_taken = True
-                        # Po akci už jen čekáme, až kostka zmizí (viz začátek smyčky)
 
                 last_column = current_column
 
@@ -236,20 +228,14 @@ if __name__ == "__main__":
         except ValueError:
             print("Chyba: Zadejte prosím platné číslo.")
 
-    LEVEL_6_TOP = 675
-    LEVEL_7_TOP = 1020
+    # Mapa 'top' souřadnic pro každý level
+    LEVEL_TOPS = {
+        1: 819, 2: 756, 3: 698, 4: 637, 5: 578,
+        6: 518, 7: 791, 8: 729, 9: 669, 10: 611,
+        11: 552, 12: 491, 13: 432, 14: 374, 15: 312
+    }
 
-    if level == 1:
-        level_2_top = LEVEL_6_TOP + (100 * (6 - 2))
-        GAME_REGION['top'] = level_2_top + 50
-    elif 2 <= level <= 5:
-        GAME_REGION['top'] = LEVEL_6_TOP + (100 * (6 - level))
-    elif level == 6:
-        GAME_REGION['top'] = LEVEL_6_TOP
-    elif level == 7:
-        GAME_REGION['top'] = LEVEL_7_TOP
-    else:
-        GAME_REGION['top'] = LEVEL_7_TOP - (100 * (level - 7))
+    GAME_REGION['top'] = LEVEL_TOPS[level]
 
     print(f"Úspěšně nastaven level {level}.")
     print(f"Herní oblast pro tento level: {GAME_REGION}")
