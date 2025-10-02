@@ -148,10 +148,11 @@ DETECTION_LATENCY_MS = 15
 
 # Hodnoty jako BLOCK_COLOR_BGR a COLUMN_WIDTH se nyní počítají v main().
 
-def find_block_edges(sct_instance, game_region: dict, block_color_bgr: np.ndarray):
+def find_block_edges(sct_instance, level: int, game_region: dict, block_color_bgr: np.ndarray):
     """
-    Snímá herní obrazovku, najde skupinu kostek a vrátí souřadnice jejího
-    levého a pravého kraje.
+    Snímá herní obrazovku a najde kraje kostek.
+    - Pro úrovně 1-4: Najde ohraničující obdélník všech kostek.
+    - Pro úrovně 5+: Najde ohraničující obdélník největší kostky.
     Vrací: (left_x, right_x, debug_frame)
     """
     try:
@@ -172,9 +173,20 @@ def find_block_edges(sct_instance, game_region: dict, block_color_bgr: np.ndarra
         if not significant_contours:
             return None, None, debug_frame
 
-        # Najdeme jeden velký ohraničující obdélník pro všechny nalezené kostky
-        all_points = np.vstack([c for c in significant_contours])
-        x, y, w, h = cv2.boundingRect(all_points)
+        x, y, w, h = 0, 0, 0, 0
+
+        # Pro úrovně 1-4: Zpracujeme všechny nalezené kostky jako jednu skupinu
+        if 1 <= level <= 4:
+            all_points = np.vstack([c for c in significant_contours])
+            x, y, w, h = cv2.boundingRect(all_points)
+            if SHOW_DEBUG_WINDOW:
+                cv2.drawContours(debug_frame, significant_contours, -1, (0, 255, 0), 2)
+        # Pro ostatní úrovně: Najdeme jen největší kostku
+        else:
+            largest_contour = max(significant_contours, key=cv2.contourArea)
+            x, y, w, h = cv2.boundingRect(largest_contour)
+            if SHOW_DEBUG_WINDOW:
+                cv2.drawContours(debug_frame, [largest_contour], -1, (0, 255, 0), 2)
 
         # Posuneme sledovací body o 30px dovnitř pro stabilitu
         left_x = x + 30
@@ -188,13 +200,9 @@ def find_block_edges(sct_instance, game_region: dict, block_color_bgr: np.ndarra
         center_y = y + h // 2
 
         if SHOW_DEBUG_WINDOW:
-            # Vykreslíme všechny kontury zeleně a obdélník modře
-            cv2.drawContours(debug_frame, significant_contours, -1, (0, 255, 0), 2)
-            cv2.rectangle(debug_frame, (x, y), (right_x, y + h), (255, 0, 0), 2)
-            # Vykreslíme levý (červený) a pravý (modrý) sledovací bod
+            cv2.rectangle(debug_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
             cv2.circle(debug_frame, (left_x, center_y), 5, (0, 0, 255), -1)
             cv2.circle(debug_frame, (right_x, center_y), 5, (255, 0, 0), -1)
-            # Vykreslíme dělící čáry mezi sloupci
             for i in range(1, NUM_COLUMNS):
                 line_x = int(i * (game_region['width'] / NUM_COLUMNS))
                 cv2.line(debug_frame, (line_x, 0), (line_x, game_region['height']), (255, 255, 0), 1)
@@ -239,7 +247,7 @@ def main():
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
-            left_x, right_x, debug_frame = find_block_edges(sct, game_region, block_color_bgr)
+            left_x, right_x, debug_frame = find_block_edges(sct, current_level, game_region, block_color_bgr)
 
             if SHOW_DEBUG_WINDOW and debug_frame is not None:
                 window_title = f"Debug Window (Lvl: {current_level}, Top: {game_region['top']})"
