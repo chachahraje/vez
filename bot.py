@@ -352,8 +352,9 @@ def main():
                         state = 'AWAITING_CYCLE'
                         dwell_time_s = None
                         column_timestamps = {}
-                        # Krátká pauza, abychom znovu nedetekovali stejnou kostku
-                        time.sleep(0.3)
+                        # 3-sekundový cooldown pro stabilizaci další úrovně
+                        print("Aplikuji 3s cooldown...")
+                        time.sleep(3)
 
                 last_column = current_column
 
