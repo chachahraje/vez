@@ -150,9 +150,9 @@ DETECTION_LATENCY_MS = 15
 
 def find_block_edges(sct_instance, level: int, game_region: dict, block_color_bgr: np.ndarray):
     """
-    Snímá herní obrazovku a najde kraje kostek.
-    - Pro úrovně 1-4: Najde ohraničující obdélník všech kostek.
-    - Pro úrovně 5+: Najde ohraničující obdélník největší kostky.
+    Snímá herní obrazovku a najde kraje/střed kostek.
+    - Pro úrovně 1-4: Vrací posunuté kraje ohraničujícího obdélníku všech kostek.
+    - Pro úrovně 5+: Vrací střed největší kostky (jako left_x i right_x).
     Vrací: (left_x, right_x, debug_frame)
     """
     try:
@@ -173,36 +173,35 @@ def find_block_edges(sct_instance, level: int, game_region: dict, block_color_bg
         if not significant_contours:
             return None, None, debug_frame
 
-        x, y, w, h = 0, 0, 0, 0
+        left_x, right_x, center_y = 0, 0, 0
 
-        # Pro úrovně 1-4: Zpracujeme všechny nalezené kostky jako jednu skupinu
+        # Pro úrovně 1-4: Logika dvou posunutých bodů
         if 1 <= level <= 4:
             all_points = np.vstack([c for c in significant_contours])
             x, y, w, h = cv2.boundingRect(all_points)
+            left_x, right_x = x + 30, x + w - 30
+            if left_x >= right_x: # Pojistka pro úzké bloky
+                left_x, right_x = x, x + w
+            center_y = y + h // 2
             if SHOW_DEBUG_WINDOW:
                 cv2.drawContours(debug_frame, significant_contours, -1, (0, 255, 0), 2)
-        # Pro ostatní úrovně: Najdeme jen největší kostku
+                cv2.rectangle(debug_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
+                cv2.circle(debug_frame, (left_x, center_y), 5, (0, 0, 255), -1) # Levý bod
+                cv2.circle(debug_frame, (right_x, center_y), 5, (255, 0, 0), -1) # Pravý bod
+        # Pro úrovně 5+: Logika jednoho středového bodu
         else:
             largest_contour = max(significant_contours, key=cv2.contourArea)
-            x, y, w, h = cv2.boundingRect(largest_contour)
+            M = cv2.moments(largest_contour)
+            if M["m00"] == 0:
+                return None, None, debug_frame
+            center_x = int(M["m10"] / M["m00"])
+            center_y = int(M["m01"] / M["m00"])
+            left_x = right_x = center_x # Vracíme střed jako oba body
             if SHOW_DEBUG_WINDOW:
                 cv2.drawContours(debug_frame, [largest_contour], -1, (0, 255, 0), 2)
-
-        # Posuneme sledovací body o 30px dovnitř pro stabilitu
-        left_x = x + 30
-        right_x = x + w - 30
-
-        # Pojistka pro případ, že by byl blok příliš úzký
-        if left_x >= right_x:
-            left_x = x
-            right_x = x + w
-
-        center_y = y + h // 2
+                cv2.circle(debug_frame, (center_x, center_y), 5, (0, 0, 255), -1) # Jen jeden bod
 
         if SHOW_DEBUG_WINDOW:
-            cv2.rectangle(debug_frame, (x, y), (x + w, y + h), (255, 0, 0), 2)
-            cv2.circle(debug_frame, (left_x, center_y), 5, (0, 0, 255), -1)
-            cv2.circle(debug_frame, (right_x, center_y), 5, (255, 0, 0), -1)
             for i in range(1, NUM_COLUMNS):
                 line_x = int(i * (game_region['width'] / NUM_COLUMNS))
                 cv2.line(debug_frame, (line_x, 0), (line_x, game_region['height']), (255, 255, 0), 1)
