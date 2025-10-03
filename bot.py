@@ -99,7 +99,8 @@ LOW_LEVEL_CONFIG = {
     "TRIGGER_COLUMN_OFFSET": 1,
     "INPUT_BURST_COUNT": 3,
     "INPUT_BURST_DELAY_MS": 3,
-    "DETECTION_LATENCY_MS": 7
+    "DETECTION_LATENCY_MS": 7,
+    "DWELL_TIME_DECREASE_MS": 1.5  # Očekávané zrychlení na každé úrovni (v ms)
 }
 
 # --- NASTAVENÍ PRO VYSOKÉ ÚROVNĚ (6-15) ---
@@ -110,7 +111,8 @@ HIGH_LEVEL_CONFIG = {
     "TRIGGER_COLUMN_OFFSET": 2,
     "INPUT_BURST_COUNT": 3,
     "INPUT_BURST_DELAY_MS": 3,
-    "DETECTION_LATENCY_MS": 0
+    "DETECTION_LATENCY_MS": 0,
+    "DWELL_TIME_DECREASE_MS": 1   # Očekávané zrychlení na každé úrovni (v ms)
 }
 
 
@@ -239,6 +241,7 @@ def main():
     last_pos_info = {'left': -1, 'time': 0}
     direction = 1
     dwell_time_samples = []
+    last_successful_dwell_time_s = None # Paměť pro poslední úspěšnou rychlost
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
@@ -270,11 +273,19 @@ def main():
                     dwell_time_samples.append(time_diff)
 
                 last_pos_info = {'left': current_left_column, 'time': current_time}
+
                 stable_dwell_time, dwell_time_samples = calculate_stable_dwell_time(dwell_time_samples)
+
+                # --- POJISTKA PROTI ZPOMALENÍ ---
+                if stable_dwell_time and last_successful_dwell_time_s:
+                    min_expected_speed_s = last_successful_dwell_time_s - (config["DWELL_TIME_DECREASE_MS"] / 1000.0)
+                    if stable_dwell_time > min_expected_speed_s:
+                        print(f"POZOR: Změřená rychlost ({stable_dwell_time*1000:.2f}ms) je pomalejší než očekávaná. Používám upravenou rychlost ({min_expected_speed_s*1000:.2f}ms).")
+                        stable_dwell_time = min_expected_speed_s
 
                 print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
 
-                # --- NOVÝ STAVOVÝ AUTOMAT ---
+                # --- STAVOVÝ AUTOMAT ---
                 if state == 'SYNC_LOW_P1_RIGHT':
                     if (current_right_column if 1 <= current_level <= 4 else current_left_column) >= (NUM_COLUMNS - 1):
                         print("SYNC (1-5): Dosažen pravý okraj. Čekám na návrat vlevo.")
@@ -301,6 +312,7 @@ def main():
                 trigger_column = config["TARGET_COLUMN"] - config["TRIGGER_COLUMN_OFFSET"]
 
                 if fire_column == trigger_column:
+                    last_successful_dwell_time_s = stable_dwell_time # Uložíme si rychlost, se kterou střílíme
                     target_pixel = (config["TARGET_COLUMN"] * column_width)
                     pixels_to_go = target_pixel - right_x
                     pixels_per_sec = column_width / stable_dwell_time
