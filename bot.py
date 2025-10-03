@@ -227,19 +227,25 @@ def main():
                         print(f"Kostka v trigger sloupci {current_column}. Cíl: {TARGET_COLUMN}")
                         print(f"Predikovaný čas dopadu za: {(predicted_arrival_time - time.perf_counter()) * 1000:.1f} ms")
 
-                        # Přesné čekání na vypočítaný čas
-                        wait_time = predicted_arrival_time - time.perf_counter()
-                        if wait_time > 0:
-                            time.sleep(wait_time)
+                        # Přesné čekání na vypočítaný čas pomocí aktivní smyčky
+                        while time.perf_counter() < predicted_arrival_time:
+                            pass
+
+                        action_time = time.perf_counter()
+                        timing_error_ms = (action_time - predicted_arrival_time) * 1000
 
                         # --- DÁVKA VSTUPŮ (INPUT BURST) ---
                         print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
                         for i in range(INPUT_BURST_COUNT):
                             pyautogui.press('space')
-                            # Krátká pauza mezi stisky v dávce
-                            time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
+                            # Přesná pauza mezi stisky v dávce, nečekáme po posledním
+                            if i < INPUT_BURST_COUNT - 1:
+                                next_press_time = time.perf_counter() + (INPUT_BURST_DELAY_MS / 1000.0)
+                                while time.perf_counter() < next_press_time:
+                                    pass
 
                         # Po akci se bot resetuje a čeká na další cyklus
+                        print(f"Přesnost časování: {timing_error_ms:+.3f} ms odchylka.")
                         print("-" * 20)
                         print("Akce provedena. Čekám na další cyklus od sloupce 0.")
                         state = 'AWAITING_CYCLE'
