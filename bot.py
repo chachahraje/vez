@@ -187,24 +187,24 @@ def find_block_edges(sct_instance, level: int, game_region: dict, block_color_bg
         print(f"Vyskytla se chyba při zpracování obrazu: {e}")
         return None, None, None
 
-def calculate_stable_dwell_time(samples, max_samples=30):
+def calculate_stable_dwell_time(samples_ms, max_samples=30):
     """
-    Z nejnovějších vzorků vypočítá stabilní průměrný čas na sloupec.
+    Z nejnovějších vzorků vypočítá stabilní průměrný čas na sloupec v milisekundách.
     - Omezuje historii na `max_samples`.
-    - Filtruje odlehlé hodnoty, aby byl výpočet robustní.
+    - Filtruje odlehlé hodnoty (např. změny směru), aby byl výpočet robustní.
     """
-    if len(samples) > max_samples:
-        samples = samples[-max_samples:]
+    if len(samples_ms) > max_samples:
+        samples_ms = samples_ms[-max_samples:]
 
-    if not samples:
-        return None, samples
+    if not samples_ms:
+        return None, samples_ms
 
-    # Vyloučíme extrémní hodnoty (např. při změně směru)
-    stable_samples = [s for s in samples if 0.01 < s < 0.25]
+    # Filtrujeme hodnoty v rozumném rozsahu (10ms - 250ms)
+    stable_samples = [s for s in samples_ms if 10 < s < 250]
     if not stable_samples:
-        return None, samples
+        return None, samples_ms
 
-    return np.mean(stable_samples), samples
+    return np.mean(stable_samples), samples_ms
 
 def main():
     """
@@ -238,10 +238,10 @@ def main():
     time.sleep(3)
 
     # --- Stavové proměnné bota ---
-    last_pos_info = {'left': -1, 'time': 0}
+    last_pos_info = {'left': -1, 'time_ms': 0}
     direction = 1
-    dwell_time_samples = []
-    last_successful_dwell_time_s = None # Paměť pro poslední úspěšnou rychlost
+    dwell_time_samples_ms = []
+    last_successful_dwell_time_ms = None # Paměť pro poslední úspěšnou rychlost
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
@@ -260,7 +260,7 @@ def main():
             current_right_column = int(right_x / column_width)
 
             if current_left_column != last_pos_info['left']:
-                current_time = time.perf_counter()
+                current_time_ms = time.perf_counter() * 1000
 
                 if last_pos_info['left'] != -1:
                     new_direction = 1 if current_left_column > last_pos_info['left'] else -1
@@ -268,20 +268,19 @@ def main():
                         print(f"Změna směru na: {'doprava' if new_direction == 1 else 'doleva'}")
                         direction = new_direction
 
-                if last_pos_info['time'] > 0:
-                    time_diff = current_time - last_pos_info['time']
-                    dwell_time_samples.append(time_diff)
+                if last_pos_info['time_ms'] > 0:
+                    time_diff_ms = current_time_ms - last_pos_info['time_ms']
+                    dwell_time_samples_ms.append(time_diff_ms)
 
-                last_pos_info = {'left': current_left_column, 'time': current_time}
-
-                stable_dwell_time, dwell_time_samples = calculate_stable_dwell_time(dwell_time_samples)
+                last_pos_info = {'left': current_left_column, 'time_ms': current_time_ms}
+                stable_dwell_time_ms, dwell_time_samples_ms = calculate_stable_dwell_time(dwell_time_samples_ms)
 
                 # --- POJISTKA PROTI ZPOMALENÍ ---
-                if stable_dwell_time and last_successful_dwell_time_s:
-                    min_expected_speed_s = last_successful_dwell_time_s - (config["DWELL_TIME_DECREASE_MS"] / 1000.0)
-                    if stable_dwell_time > min_expected_speed_s:
-                        print(f"POZOR: Změřená rychlost ({stable_dwell_time*1000:.2f}ms) je pomalejší než očekávaná. Používám upravenou rychlost ({min_expected_speed_s*1000:.2f}ms).")
-                        stable_dwell_time = min_expected_speed_s
+                if stable_dwell_time_ms and last_successful_dwell_time_ms:
+                    min_expected_speed_ms = last_successful_dwell_time_ms - config["DWELL_TIME_DECREASE_MS"]
+                    if stable_dwell_time_ms > min_expected_speed_ms:
+                        print(f"POZOR: Změřená rychlost ({stable_dwell_time_ms:.2f}ms) je pomalejší než očekávaná. Používám upravenou rychlost ({min_expected_speed_ms:.2f}ms).")
+                        stable_dwell_time_ms = min_expected_speed_ms
 
                 print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
 
@@ -307,23 +306,23 @@ def main():
                         print("SYNC (6+): Dosažen 2. levý okraj. Bot je nyní aktivován (ARMED).")
                         state = 'ARMED'
 
-            if state == 'ARMED' and direction == 1 and stable_dwell_time is not None:
+            if state == 'ARMED' and direction == 1 and stable_dwell_time_ms is not None:
                 fire_column = int(right_x / column_width)
                 trigger_column = config["TARGET_COLUMN"] - config["TRIGGER_COLUMN_OFFSET"]
 
                 if fire_column == trigger_column:
-                    last_successful_dwell_time_s = stable_dwell_time # Uložíme si rychlost, se kterou střílíme
+                    last_successful_dwell_time_ms = stable_dwell_time_ms # Uložíme si rychlost, se kterou střílíme
                     target_pixel = (config["TARGET_COLUMN"] * column_width)
                     pixels_to_go = target_pixel - right_x
-                    pixels_per_sec = column_width / stable_dwell_time
-                    time_to_target_s = pixels_to_go / pixels_per_sec
-                    detection_latency_s = config["DETECTION_LATENCY_MS"] / 1000.0
-                    predicted_arrival_time = time.perf_counter() + time_to_target_s - detection_latency_s
+                    pixels_per_ms = column_width / stable_dwell_time_ms
+                    time_to_target_ms = pixels_to_go / pixels_per_ms
+
+                    predicted_arrival_time_ms = (time.perf_counter() * 1000) + time_to_target_ms - config["DETECTION_LATENCY_MS"]
 
                     print(f"Pravý kraj v trigger sloupci {fire_column}. Cíl: {config['TARGET_COLUMN']}")
-                    print(f"Predikovaný čas dopadu za: {time_to_target_s * 1000:.1f} ms")
+                    print(f"Predikovaný čas dopadu za: {time_to_target_ms:.1f} ms")
 
-                    while time.perf_counter() < predicted_arrival_time: pass
+                    while (time.perf_counter() * 1000) < predicted_arrival_time_ms: pass
 
                     print(f"==> MEZERNÍK! (Dávka {config['INPUT_BURST_COUNT']} stisků)")
                     for i in range(config['INPUT_BURST_COUNT']):
@@ -350,7 +349,7 @@ def main():
                     print(f"Nové parametry: Oblast={game_region}, Konfigurace={config}")
                     print(f"Nový stav synchronizace: {state}")
 
-                    dwell_time_samples.clear()
+                    dwell_time_samples_ms.clear()
                     print("Aplikuji 3s cooldown a čekám na plnou synchronizaci...")
                     time.sleep(3)
 
