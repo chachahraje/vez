@@ -98,19 +98,19 @@ LOW_LEVEL_CONFIG = {
     "TARGET_COLUMN": 9,
     "TRIGGER_COLUMN_OFFSET": 1,
     "INPUT_BURST_COUNT": 3,
-    "INPUT_BURST_DELAY_MS": 7,
-    "DETECTION_LATENCY_MS": 15
+    "INPUT_BURST_DELAY_MS": 3,
+    "DETECTION_LATENCY_MS": 7
 }
 
 # --- NASTAVENÍ PRO VYSOKÉ ÚROVNĚ (6-15) ---
 # Používá se pro žluté kostky a jeden blok. Upravte podle potřeby.
 HIGH_LEVEL_CONFIG = {
     "COLOR_TOLERANCE": 25,
-    "TARGET_COLUMN": 8,
+    "TARGET_COLUMN": 9,
     "TRIGGER_COLUMN_OFFSET": 2,
     "INPUT_BURST_COUNT": 3,
-    "INPUT_BURST_DELAY_MS": 7,
-    "DETECTION_LATENCY_MS": 15
+    "INPUT_BURST_DELAY_MS": 3,
+    "DETECTION_LATENCY_MS": 0
 }
 
 
@@ -206,18 +206,20 @@ def calculate_stable_dwell_time(samples, max_samples=30):
 
 def main():
     """
-    Hlavní smyčka bota s kontinuálním měřením a dvoufázovou synchronizací.
+    Hlavní smyčka bota s kontinuálním měřením a rozdělenou synchronizací.
     """
     # --- Lokální proměnné pro správu hry ---
     current_level = STARTING_LEVEL
 
-    # --- Dynamické načtení konfigurace ---
+    # --- Dynamické načtení konfigurace a počátečního stavu ---
     if 1 <= current_level <= 5:
         config = LOW_LEVEL_CONFIG
         block_color_rgb = BLUE_BLOCK_COLOR_RGB
+        state = 'SYNC_LOW_P1_RIGHT'
     else:
         config = HIGH_LEVEL_CONFIG
         block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+        state = 'SYNC_HIGH_P1_LEFT'
 
     game_region = calculate_game_region(current_level)
     block_color_bgr = np.array(block_color_rgb[::-1])
@@ -226,6 +228,7 @@ def main():
     print("="*50)
     print(f"Start na úrovni: {current_level}, Cílová oblast: {game_region}")
     print(f"Použitá konfigurace: {config}")
+    print(f"Počáteční stav synchronizace: {state}")
     print("Bot se spouští za 3 sekundy...")
     print("PŘEPNĚTE SE DO OKNA SE HROU!")
     print("Pro ukončení bota stiskněte a držte klávesu 'q'.")
@@ -233,7 +236,6 @@ def main():
     time.sleep(3)
 
     # --- Stavové proměnné bota ---
-    state = 'SYNC_WAIT_RIGHT'
     last_pos_info = {'left': -1, 'time': 0}
     direction = 1
     dwell_time_samples = []
@@ -268,19 +270,30 @@ def main():
                     dwell_time_samples.append(time_diff)
 
                 last_pos_info = {'left': current_left_column, 'time': current_time}
-
                 stable_dwell_time, dwell_time_samples = calculate_stable_dwell_time(dwell_time_samples)
 
                 print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
 
-                if state == 'SYNC_WAIT_RIGHT':
-                    sync_col = current_right_column if 1 <= current_level <= 4 else current_left_column
-                    if sync_col >= (NUM_COLUMNS - 1):
-                        print("SYNC: Dosažen pravý okraj. Čekám na návrat vlevo.")
-                        state = 'SYNC_WAIT_LEFT'
-                elif state == 'SYNC_WAIT_LEFT':
+                # --- NOVÝ STAVOVÝ AUTOMAT ---
+                if state == 'SYNC_LOW_P1_RIGHT':
+                    if (current_right_column if 1 <= current_level <= 4 else current_left_column) >= (NUM_COLUMNS - 1):
+                        print("SYNC (1-5): Dosažen pravý okraj. Čekám na návrat vlevo.")
+                        state = 'SYNC_LOW_P2_LEFT'
+                elif state == 'SYNC_LOW_P2_LEFT':
                     if current_left_column == 0:
-                        print("SYNC: Dosažen levý okraj. Bot je nyní aktivován (ARMED).")
+                        print("SYNC (1-5): Dosažen levý okraj. Bot je nyní aktivován (ARMED).")
+                        state = 'ARMED'
+                elif state == 'SYNC_HIGH_P1_LEFT':
+                    if current_left_column == 0:
+                        print("SYNC (6+): Dosažen 1. levý okraj. Čekám na cestu vpravo.")
+                        state = 'SYNC_HIGH_P2_RIGHT'
+                elif state == 'SYNC_HIGH_P2_RIGHT':
+                    if current_right_column >= (NUM_COLUMNS - 1):
+                        print("SYNC (6+): Dosažen pravý okraj. Čekám na 2. návrat vlevo.")
+                        state = 'SYNC_HIGH_P3_LEFT'
+                elif state == 'SYNC_HIGH_P3_LEFT':
+                    if current_left_column == 0:
+                        print("SYNC (6+): Dosažen 2. levý okraj. Bot je nyní aktivován (ARMED).")
                         state = 'ARMED'
 
             if state == 'ARMED' and direction == 1 and stable_dwell_time is not None:
@@ -292,7 +305,6 @@ def main():
                     pixels_to_go = target_pixel - right_x
                     pixels_per_sec = column_width / stable_dwell_time
                     time_to_target_s = pixels_to_go / pixels_per_sec
-
                     detection_latency_s = config["DETECTION_LATENCY_MS"] / 1000.0
                     predicted_arrival_time = time.perf_counter() + time_to_target_s - detection_latency_s
 
@@ -314,16 +326,18 @@ def main():
                     if 1 <= current_level <= 5:
                         config = LOW_LEVEL_CONFIG
                         block_color_rgb = BLUE_BLOCK_COLOR_RGB
+                        state = 'SYNC_LOW_P1_RIGHT'
                     else:
                         config = HIGH_LEVEL_CONFIG
                         block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+                        state = 'SYNC_HIGH_P1_LEFT'
 
                     game_region = calculate_game_region(current_level)
                     block_color_bgr = np.array(block_color_rgb[::-1])
                     column_width = game_region['width'] / NUM_COLUMNS
                     print(f"Nové parametry: Oblast={game_region}, Konfigurace={config}")
+                    print(f"Nový stav synchronizace: {state}")
 
-                    state = 'SYNC_WAIT_RIGHT'
                     dwell_time_samples.clear()
                     print("Aplikuji 3s cooldown a čekám na plnou synchronizaci...")
                     time.sleep(3)
