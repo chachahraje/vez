@@ -85,60 +85,33 @@ SHOW_DEBUG_WINDOW = True
 YELLOW_BLOCK_COLOR_RGB = (236, 168, 44)  # Pro úrovně 6-15
 BLUE_BLOCK_COLOR_RGB = (45, 170, 232)    # Pro úrovně 1-5
 
-# Výběr barvy (BLOCK_COLOR_RGB) se nyní provádí dynamicky uvnitř funkce main().
-
-#    Jak moc se může skutečná barva lišit od zadané.
-#    Větší číslo znamená větší toleranci (např. pro různé odstíny).
-COLOR_TOLERANCE = 25
-
+# Výběr barvy a dalších parametrů se nyní provádí dynamicky uvnitř funkce main().
 
 # 3. HERNÍ PARAMETRY
 #    Počet sloupců, mezi kterými kostka přeskakuje.
 NUM_COLUMNS = 10
 
-#    CÍLOVÝ SLOUPEC (TARGET_COLUMN)
-#    Do kterého sloupce má bot mířit? Čísluje se od 0.
-#    Pokud máte 10 sloupců (0 až 9), sloupec 4 je pátý zleva.
-#    Toto je nejdůležitější hodnota pro míření.
-TARGET_COLUMN = 8
+# --- NASTAVENÍ PRO NÍZKÉ ÚROVNĚ (1-5) ---
+# Používá se pro modré kostky a více bloků.
+LOW_LEVEL_CONFIG = {
+    "COLOR_TOLERANCE": 45,
+    "TARGET_COLUMN": 9,
+    "TRIGGER_COLUMN_OFFSET": 1,
+    "INPUT_BURST_COUNT": 3,
+    "INPUT_BURST_DELAY_MS": 7,
+    "DETECTION_LATENCY_MS": 15
+}
 
-
-# 4. NASTAVENÍ PRO DYNAMICKÉ ČASOVÁNÍ
-#    Tato nastavení řídí novou logiku, která měří rychlost kostky
-#    a podle toho předvídá, kdy stisknout mezerník.
-# ==============================================================================
-
-#    SPUŠTĚNÍ AKCE (TRIGGER)
-#    Kolik sloupců PŘED cílovým sloupcem má bot začít s výpočtem.
-#    Pokud je cíl sloupec 8 a TRIGGER_COLUMN_OFFSET = 2, bot se "aktivuje",
-#    když kostka dorazí do sloupce 6 (při pohybu zleva doprava).
-#    Větší hodnota dává botovi více času na výpočet, ale vyžaduje
-#    stabilnější rychlost kostky.
-#    Doporučená hodnota: 1 nebo 2.
-TRIGGER_COLUMN_OFFSET = 2
-
-
-#    DÁVKA VSTUPŮ (INPUT BURST)
-#    Abychom měli jistotu, že náš stisk hra zaregistruje, pošleme jich
-#    několik ve velmi rychlém sledu. Tím pokryjeme případné malé
-#    nepřesnosti v časování nebo zpoždění ve hře.
-
-#    Počet stisků v jedné dávce.
-#    Doporučená hodnota: 3 až 5.
-INPUT_BURST_COUNT = 3
-
-#    Prodleva mezi jednotlivými stisky v dávce (v milisekundách).
-#    Cílem je trefit herní okno pro vstup, které je často velmi krátké.
-#    Doporučená hodnota: 5 až 10 ms.
-INPUT_BURST_DELAY_MS = 7
-
-
-# 5. KOMPENZACE LATENCE
-#    Každý systém má malé zpoždění mezi tím, co se stane na obrazovce,
-#    a tím, kdy to náš skript zjistí. Tato hodnota (v milisekundách)
-#    se odečte od naměřeného času, aby byly výpočty přesnější.
-#    Dobrá startovní hodnota je 10-20 ms. Laďte podle potřeby.
-DETECTION_LATENCY_MS = 15
+# --- NASTAVENÍ PRO VYSOKÉ ÚROVNĚ (6-15) ---
+# Používá se pro žluté kostky a jeden blok. Upravte podle potřeby.
+HIGH_LEVEL_CONFIG = {
+    "COLOR_TOLERANCE": 25,
+    "TARGET_COLUMN": 8,
+    "TRIGGER_COLUMN_OFFSET": 2,
+    "INPUT_BURST_COUNT": 3,
+    "INPUT_BURST_DELAY_MS": 7,
+    "DETECTION_LATENCY_MS": 15
+}
 
 
 # ==============================================================================
@@ -148,7 +121,7 @@ DETECTION_LATENCY_MS = 15
 
 # Hodnoty jako BLOCK_COLOR_BGR a COLUMN_WIDTH se nyní počítají v main().
 
-def find_block_edges(sct_instance, level: int, game_region: dict, block_color_bgr: np.ndarray):
+def find_block_edges(sct_instance, level: int, game_region: dict, block_color_bgr: np.ndarray, color_tolerance: int):
     """
     Snímá herní obrazovku a najde kraje/střed kostek.
     - Pro úrovně 1-4: Vrací posunuté kraje ohraničujícího obdélníku všech kostek.
@@ -161,8 +134,8 @@ def find_block_edges(sct_instance, level: int, game_region: dict, block_color_bg
         frame = cv2.cvtColor(img_np, cv2.COLOR_BGRA2BGR)
         debug_frame = frame.copy() if SHOW_DEBUG_WINDOW else None
 
-        lower_bound = np.maximum(0, block_color_bgr - COLOR_TOLERANCE)
-        upper_bound = np.minimum(255, block_color_bgr + COLOR_TOLERANCE)
+        lower_bound = np.maximum(0, block_color_bgr - color_tolerance)
+        upper_bound = np.minimum(255, block_color_bgr + color_tolerance)
         mask = cv2.inRange(frame, lower_bound, upper_bound)
 
         contours, _ = cv2.findContours(mask, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
@@ -238,8 +211,13 @@ def main():
     # --- Lokální proměnné pro správu hry ---
     current_level = STARTING_LEVEL
 
-    if 1 <= current_level <= 5: block_color_rgb = BLUE_BLOCK_COLOR_RGB
-    else: block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+    # --- Dynamické načtení konfigurace ---
+    if 1 <= current_level <= 5:
+        config = LOW_LEVEL_CONFIG
+        block_color_rgb = BLUE_BLOCK_COLOR_RGB
+    else:
+        config = HIGH_LEVEL_CONFIG
+        block_color_rgb = YELLOW_BLOCK_COLOR_RGB
 
     game_region = calculate_game_region(current_level)
     block_color_bgr = np.array(block_color_rgb[::-1])
@@ -247,6 +225,7 @@ def main():
 
     print("="*50)
     print(f"Start na úrovni: {current_level}, Cílová oblast: {game_region}")
+    print(f"Použitá konfigurace: {config}")
     print("Bot se spouští za 3 sekundy...")
     print("PŘEPNĚTE SE DO OKNA SE HROU!")
     print("Pro ukončení bota stiskněte a držte klávesu 'q'.")
@@ -256,12 +235,12 @@ def main():
     # --- Stavové proměnné bota ---
     state = 'SYNC_WAIT_RIGHT'
     last_pos_info = {'left': -1, 'time': 0}
-    direction = 1 # Spolehlivé sledování směru
+    direction = 1
     dwell_time_samples = []
 
     with mss.mss() as sct:
         while not keyboard.is_pressed('q'):
-            left_x, right_x, debug_frame = find_block_edges(sct, current_level, game_region, block_color_bgr)
+            left_x, right_x, debug_frame = find_block_edges(sct, current_level, game_region, block_color_bgr, config["COLOR_TOLERANCE"])
 
             if SHOW_DEBUG_WINDOW and debug_frame is not None:
                 window_title = f"Debug Window (Lvl: {current_level}, Top: {game_region['top']})"
@@ -275,18 +254,15 @@ def main():
             current_left_column = int(left_x / column_width)
             current_right_column = int(right_x / column_width)
 
-            # --- Kontinuální měření rychlosti a aktualizace směru ---
             if current_left_column != last_pos_info['left']:
                 current_time = time.perf_counter()
 
-                # Aktualizace směru POUZE při změně sloupce
                 if last_pos_info['left'] != -1:
                     new_direction = 1 if current_left_column > last_pos_info['left'] else -1
                     if new_direction != direction:
                         print(f"Změna směru na: {'doprava' if new_direction == 1 else 'doleva'}")
                         direction = new_direction
 
-                # Přidání vzorku rychlosti
                 if last_pos_info['time'] > 0:
                     time_diff = current_time - last_pos_info['time']
                     dwell_time_samples.append(time_diff)
@@ -295,7 +271,6 @@ def main():
 
                 stable_dwell_time, dwell_time_samples = calculate_stable_dwell_time(dwell_time_samples)
 
-                # --- STAVOVÝ AUTOMAT PRO SYNCHRONIZACI ---
                 print(f"Stav: {state}, Levý sl: {current_left_column}, Pravý sl: {current_right_column}, Směr: {'doprava' if direction == 1 else 'doleva'}")
 
                 if state == 'SYNC_WAIT_RIGHT':
@@ -308,40 +283,45 @@ def main():
                         print("SYNC: Dosažen levý okraj. Bot je nyní aktivován (ARMED).")
                         state = 'ARMED'
 
-            # --- LOGIKA PROVEDENÍ AKCE ---
             if state == 'ARMED' and direction == 1 and stable_dwell_time is not None:
                 fire_column = int(right_x / column_width)
-                trigger_column = TARGET_COLUMN - TRIGGER_COLUMN_OFFSET
+                trigger_column = config["TARGET_COLUMN"] - config["TRIGGER_COLUMN_OFFSET"]
 
                 if fire_column == trigger_column:
-                    target_pixel = (TARGET_COLUMN * column_width)
+                    target_pixel = (config["TARGET_COLUMN"] * column_width)
                     pixels_to_go = target_pixel - right_x
                     pixels_per_sec = column_width / stable_dwell_time
                     time_to_target_s = pixels_to_go / pixels_per_sec
-                    predicted_arrival_time = time.perf_counter() + time_to_target_s
 
-                    print(f"Pravý kraj v trigger sloupci {fire_column}. Cíl: {TARGET_COLUMN}")
+                    detection_latency_s = config["DETECTION_LATENCY_MS"] / 1000.0
+                    predicted_arrival_time = time.perf_counter() + time_to_target_s - detection_latency_s
+
+                    print(f"Pravý kraj v trigger sloupci {fire_column}. Cíl: {config['TARGET_COLUMN']}")
                     print(f"Predikovaný čas dopadu za: {time_to_target_s * 1000:.1f} ms")
 
                     while time.perf_counter() < predicted_arrival_time: pass
 
-                    print(f"==> MEZERNÍK! (Dávka {INPUT_BURST_COUNT} stisků)")
-                    for i in range(INPUT_BURST_COUNT):
+                    print(f"==> MEZERNÍK! (Dávka {config['INPUT_BURST_COUNT']} stisků)")
+                    for i in range(config['INPUT_BURST_COUNT']):
                         pyautogui.press('space')
-                        time.sleep(INPUT_BURST_DELAY_MS / 1000.0)
+                        time.sleep(config['INPUT_BURST_DELAY_MS'] / 1000.0)
 
                     # --- RESET ---
                     current_level += 1
                     print("-" * 20)
                     print(f"Akce provedena. Postup na úroveň {current_level}.")
 
-                    if 1 <= current_level <= 5: block_color_rgb = BLUE_BLOCK_COLOR_RGB
-                    else: block_color_rgb = YELLOW_BLOCK_COLOR_RGB
+                    if 1 <= current_level <= 5:
+                        config = LOW_LEVEL_CONFIG
+                        block_color_rgb = BLUE_BLOCK_COLOR_RGB
+                    else:
+                        config = HIGH_LEVEL_CONFIG
+                        block_color_rgb = YELLOW_BLOCK_COLOR_RGB
 
                     game_region = calculate_game_region(current_level)
                     block_color_bgr = np.array(block_color_rgb[::-1])
                     column_width = game_region['width'] / NUM_COLUMNS
-                    print(f"Nové parametry: Oblast={game_region}")
+                    print(f"Nové parametry: Oblast={game_region}, Konfigurace={config}")
 
                     state = 'SYNC_WAIT_RIGHT'
                     dwell_time_samples.clear()
